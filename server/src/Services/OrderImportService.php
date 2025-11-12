@@ -112,7 +112,6 @@ class OrderImportService
      */
     public function parseFile(UploadedFile $file): array
     {
-        // TODO: Implement file type detection and routing
         // Validate file size
         if ($file->getSize() > $this->maxFileSize) {
             throw new Exception("File size exceeds maximum allowed size of " . ($this->maxFileSize / 1024 / 1024) . "MB");
@@ -129,21 +128,16 @@ class OrderImportService
         Log::info("Parsing file", ['filename' => $file->getClientOriginalName(), 'size' => $file->getSize(), 'extension' => $extension]);
 
         // Route to appropriate parser based on file type
-        switch ($extension) {
-            case 'csv':
-                return $this->parseCsv($file);
-            case 'xlsx':
-            case 'xls':
-                return $this->parseExcel($file);
-            case 'json':
-                return $this->parseJson($file);
-            default:
-                throw new Exception("Parser not implemented for file type: {$extension}");
-        }
+        return match($extension) {
+            'csv' => $this->parseCsv($file),
+            'xlsx', 'xls' => $this->parseExcel($file),
+            'json' => $this->parseJson($file),
+            default => throw new Exception("Parser not implemented for file type: {$extension}")
+        };
     }
 
     /**
-     * Parse CSV file with automatic delimiter detection
+     * Parse CSV file with automatic delimiter detection and encoding handling
      * 
      * @param UploadedFile $file
      * @return array
@@ -151,46 +145,84 @@ class OrderImportService
      */
     protected function parseCsv(UploadedFile $file): array
     {
-        // TODO: Implement CSV parsing using League\Csv
-        // Handle different delimiters, encodings
-        // Return standardized array structure
-        
         try {
-            $csv = Reader::createFromPath($file->getRealPath(), 'r');
+            // Create CSV reader from uploaded file
+            $csv = Reader::createFromPath($file->getPathname(), 'r');
             
-            // Auto-detect delimiter
-            $csv->setDelimiter($this->detectCsvDelimiter($file));
+            // Detect and set delimiter
+            $delimiters = [',', ';', "\t", '|'];
+            $delimiter = $this->detectCsvDelimiter($file->getPathname(), $delimiters);
+            $csv->setDelimiter($delimiter);
             
-            // Set header offset
+            // Detect encoding and handle if needed
+            $fileContent = file_get_contents($file->getPathname());
+            $encoding = mb_detect_encoding($fileContent, ['UTF-8', 'ISO-8859-1', 'Windows-1252'], true);
+            
+            // Convert to UTF-8 if necessary
+            if ($encoding && $encoding !== 'UTF-8') {
+                $convertedContent = mb_convert_encoding($fileContent, 'UTF-8', $encoding);
+                $tempFile = tempnam(sys_get_temp_dir(), 'csv_import_');
+                file_put_contents($tempFile, $convertedContent);
+                $csv = Reader::createFromPath($tempFile, 'r');
+                $csv->setDelimiter($delimiter);
+            }
+            
+            // Set header offset (assume first row is header)
             $csv->setHeaderOffset(0);
             
             // Get headers
             $headers = $csv->getHeader();
             
-            // Get all records
-            $statement = Statement::create();
-            $records = $statement->process($csv);
+            // Clean up headers
+            $headers = array_map('trim', $headers);
             
-            $rows = [];
-            $rowNumber = 1;
+            // Get records with row processing
+            $records = [];
+            $rowCount = 0;
             
-            foreach ($records as $record) {
-                $rows[] = [
-                    'row_number' => $rowNumber++,
-                    'data' => $record
-                ];
+            foreach ($csv->getRecords() as $offset => $record) {
+                // Clean up the record data
+                $cleanRecord = array_map('trim', $record);
+                
+                $records[] = $cleanRecord;
+                $rowCount++;
+                
+                // Limit for large files to prevent memory issues
+                if ($rowCount >= 10000) {
+                    Log::warning("CSV parsing limited to 10,000 rows for memory efficiency", [
+                        'filename' => $file->getClientOriginalName(),
+                        'total_processed' => $rowCount
+                    ]);
+                    break;
+                }
             }
             
-            Log::info("CSV parsed successfully", ['headers' => count($headers), 'rows' => count($rows)]);
+            // Clean up temporary file if created
+            if (isset($tempFile) && file_exists($tempFile)) {
+                unlink($tempFile);
+            }
+            
+            Log::info("CSV parsed successfully", [
+                'filename' => $file->getClientOriginalName(),
+                'headers' => count($headers),
+                'rows' => count($records),
+                'delimiter' => $delimiter,
+                'encoding' => $encoding ?: 'UTF-8'
+            ]);
             
             return [
                 'headers' => $headers,
-                'rows' => $rows,
-                'total' => count($rows)
+                'rows' => $records,
+                'total' => count($records),
+                'delimiter' => $delimiter,
+                'encoding' => $encoding ?: 'UTF-8'
             ];
             
         } catch (Exception $e) {
-            Log::error("CSV parsing failed", ['error' => $e->getMessage()]);
+            Log::error("CSV parsing failed", [
+                'filename' => $file->getClientOriginalName(),
+                'error' => $e->getMessage()
+            ]);
             throw new Exception("Failed to parse CSV file: " . $e->getMessage());
         }
     }
@@ -1180,24 +1212,65 @@ class OrderImportService
     }
 
     /**
-     * Detect CSV delimiter from file content
+     * Detect CSV delimiter from file content by analyzing the first few lines
      * 
-     * @param UploadedFile $file
-     * @return string Detected delimiter
+     * @param string $filepath Path to the CSV file
+     * @param array $delimiters Array of possible delimiters to test
+     * @return string The most likely delimiter
      */
-    protected function detectCsvDelimiter(UploadedFile $file): string
+    protected function detectCsvDelimiter(string $filepath, array $delimiters = [',', ';', "\t", '|']): string
     {
-        $delimiters = [',', ';', "\t", '|'];
-        $handle = fopen($file->getRealPath(), 'r');
-        $firstLine = fgets($handle);
+        $handle = fopen($filepath, 'r');
+        
+        // Read first few lines for better detection
+        $lines = [];
+        for ($i = 0; $i < 3 && !feof($handle); $i++) {
+            $line = fgets($handle);
+            if ($line !== false) {
+                $lines[] = trim($line);
+            }
+        }
         fclose($handle);
         
-        $delimiterCount = [];
-        foreach ($delimiters as $delimiter) {
-            $delimiterCount[$delimiter] = substr_count($firstLine, $delimiter);
+        if (empty($lines)) {
+            return ','; // Default to comma if can't read file
         }
         
-        return array_keys($delimiterCount, max($delimiterCount))[0];
+        $counts = [];
+        foreach ($delimiters as $delimiter) {
+            $counts[$delimiter] = 0;
+            
+            // Count delimiter occurrences across all sample lines
+            foreach ($lines as $line) {
+                $counts[$delimiter] += substr_count($line, $delimiter);
+            }
+            
+            // Average across lines for consistency check
+            if (count($lines) > 1) {
+                $counts[$delimiter] = $counts[$delimiter] / count($lines);
+            }
+        }
+        
+        // Find delimiter with highest average count
+        $maxCount = max($counts);
+        
+        // If no delimiters found, default to comma
+        if ($maxCount == 0) {
+            Log::warning("No delimiters detected in CSV, defaulting to comma");
+            return ',';
+        }
+        
+        // Return the delimiter with the highest count
+        $detectedDelimiter = array_search($maxCount, $counts);
+        
+        Log::debug("CSV delimiter detection", [
+            'detected' => $detectedDelimiter === "\t" ? 'TAB' : $detectedDelimiter,
+            'counts' => array_map(function($d, $c) {
+                return ['delimiter' => $d === "\t" ? 'TAB' : $d, 'count' => $c];
+            }, array_keys($counts), $counts)
+        ]);
+        
+        return $detectedDelimiter ?: ',';
     }
 
     /**
