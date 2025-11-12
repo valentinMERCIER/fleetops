@@ -42,8 +42,12 @@
         "friendsofphp/php-cs-fixer": "^3.34.1",
         "nunomaduro/collision": "^7.0",
         "pestphp/pest": "^2.33.2",
+        "pestphp/pest-plugin-laravel": "^2.0",
+        "orchestra/testbench": "^8.0",
+        "mockery/mockery": "^1.5",
+        "fakerphp/faker": "^1.20",
         "phpstan/phpstan": "^1.10.38",
-        "symfony/var-dumper": "^5.4.29"
+        "symfony/var-dumper": "^6.2"
     },
     "autoload": {
         "psr-4": {
@@ -53,7 +57,8 @@
     },
     "autoload-dev": {
         "psr-4": {
-            "Fleetbase\\Tests\\": "server/tests/"
+            "Fleetbase\\FleetOps\\Tests\\": "server/tests/",
+            "Fleetbase\\FleetOps\\Factories\\": "server/tests/Factories/"
         }
     },
     "minimum-stability": "dev",
@@ -89,11 +94,16 @@
         "lint": "php-cs-fixer fix -v",
         "test:lint": "php-cs-fixer fix -v --dry-run",
         "test:types": "phpstan analyse --ansi --memory-limit=4G",
-        "test:unit": "pest --colors=always",
+        "pest": "@php pest",
+        "pest-simple": "@php pest-simple",
+        "test:unit": "@php pest --configuration server/phpunit.xml --testsuite Unit",
+        "test:feature": "@php pest --configuration server/phpunit.xml --testsuite Feature", 
+        "test:coverage": "@php pest --configuration server/phpunit.xml --coverage",
+        "test:all": "@php pest --configuration server/phpunit.xml",
         "test": [
             "@test:lint",
             "@test:types",
-            "@test:unit"
+            "@test:all"
         ]
     }
 }

@@ -1,0 +1,43 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Simple PEST Runner for FleetOps - Fallback Version
+ */
+
+// Load autoloader
+$autoload = __DIR__ . '/server_vendor/autoload.php';
+
+if (!file_exists($autoload)) {
+    echo "Autoloader not found at: $autoload\n";
+    echo "Please run 'composer install' first.\n";
+    exit(1);
+}
+
+require $autoload;
+
+// Remove script name from arguments
+$args = $_SERVER['argv'];
+array_shift($args);
+
+// Build the command to run PEST via PHP
+$pestPath = __DIR__ . '/server_vendor/bin/pest';
+
+if (!file_exists($pestPath)) {
+    echo "PEST binary not found at: $pestPath\n";
+    echo "Please ensure PEST is installed: composer require --dev pestphp/pest\n";
+    exit(1);
+}
+
+// Pass through to PEST with PHP and proper include path
+$command = sprintf(
+    '%s -d include_path=.:%s %s %s',
+    PHP_BINARY,
+    __DIR__ . '/server_vendor',
+    escapeshellarg($pestPath),
+    implode(' ', array_map('escapeshellarg', $args))
+);
+
+// Execute and pass through exit code
+passthru($command, $exitCode);
+exit($exitCode);

@@ -1,0 +1,135 @@
+#!/usr/bin/env php
+<?php
+
+/**
+ * Custom PEST Runner for FleetOps
+ * 
+ * This runner handles the non-standard vendor directory structure
+ * where dependencies are installed in 'server_vendor' instead of 'vendor'
+ */
+
+// Suppress deprecation warnings for cleaner output  
+error_reporting(E_ALL & ~E_DEPRECATED);
+
+// Load autoloader
+$autoloadPath = __DIR__ . '/server_vendor/autoload.php';
+
+if (!file_exists($autoloadPath)) {
+    fwrite(STDERR, "\033[0;31m❌ Autoloader not found: $autoloadPath\033[0m\n");
+    fwrite(STDERR, "Please run 'composer install' first.\n");
+    exit(1);
+}
+
+require_once $autoloadPath;
+
+// Verify PEST classes are available
+if (!class_exists('Pest\\TestSuite')) {
+    fwrite(STDERR, "\033[0;31m❌ PEST TestSuite class not found.\033[0m\n"); 
+    fwrite(STDERR, "Please ensure PEST is installed: composer require --dev pestphp/pest\n");
+    exit(1);
+}
+
+if (in_array('--debug', $_SERVER['argv'])) {
+    echo "✅ PEST custom runner initialized\n";
+    echo "✅ Autoloader: $autoloadPath\n";
+    echo "✅ PEST classes available\n";
+}
+
+// Parse arguments to handle PEST-specific flags
+$arguments = $_SERVER['argv'] ?? [];
+$todo = false;
+$dirty = false;
+
+foreach ($arguments as $key => $value) {
+    if (str_contains($value, '--dirty')) {
+        $dirty = true;
+        unset($arguments[$key]);
+    }
+
+    if (in_array($value, ['--todo', '--todos'], true)) {
+        $todo = true;
+        unset($arguments[$key]);
+    }
+
+    if (str_contains($value, '--teamcity')) {
+        unset($arguments[$key]);
+        $arguments[] = '--no-output';
+        unset($_SERVER['COLLISION_PRINTER']);
+    }
+}
+
+// Update $_SERVER['argv'] with filtered arguments
+$_SERVER['argv'] = array_values($arguments);
+
+try {
+    // Create Symfony Console components
+    $input = new \Symfony\Component\Console\Input\ArgvInput();
+    $output = new \Symfony\Component\Console\Output\ConsoleOutput();
+    
+    // Get the project root path
+    $rootPath = __DIR__;
+    
+    // Initialize PEST TestSuite with our custom test directory
+    $testSuite = \Pest\TestSuite::getInstance(
+        $rootPath,
+        $input->getParameterOption('--test-directory', 'server/tests'),
+    );
+    
+    // Add test case filters if specified
+    if ($dirty && class_exists('Pest\\TestCaseFilters\\GitDirtyTestCaseFilter')) {
+        $testSuite->tests->addTestCaseFilter(new \Pest\TestCaseFilters\GitDirtyTestCaseFilter($rootPath));
+    }
+    
+    if ($todo && class_exists('Pest\\TestCaseMethodFilters\\TodoTestCaseFilter')) {
+        $testSuite->tests->addTestCaseMethodFilter(new \Pest\TestCaseMethodFilters\TodoTestCaseFilter());
+    }
+    
+    // Try to run PEST using the correct kernel initialization
+    if (class_exists('PHPUnit\\TextUI\\Application')) {
+        // Create PHPUnit application 
+        $application = new \PHPUnit\TextUI\Application();
+        
+        if (class_exists('Pest\\Kernel')) {
+            // Create PEST kernel with correct parameters
+            $kernel = new \Pest\Kernel($application, $output);
+            
+            // Get arguments as arrays
+            $originalArguments = $_SERVER['argv'];
+            $arguments = $_SERVER['argv'];
+            
+            exit($kernel->handle($originalArguments, $arguments));
+        }
+    }
+    
+    // Fallback: If kernel approach doesn't work, try direct PHPUnit execution
+    // but we need to temporarily disable PEST's PHPUnit hook
+    putenv('PEST_DISABLED=1');
+    
+    $args = $_SERVER['argv'];
+    array_shift($args); // Remove script name
+    
+    // Convert to PHPUnit arguments
+    $phpunitArgs = array_merge(['phpunit'], $args);
+    
+    if (in_array('--debug', $_SERVER['argv'])) {
+        echo "✅ Falling back to direct PHPUnit execution\n";
+        echo "✅ Args: " . implode(' ', $phpunitArgs) . "\n";
+    }
+    
+    $_SERVER['argv'] = $phpunitArgs;
+    $application = new \PHPUnit\TextUI\Application();
+    exit($application->run($phpunitArgs));
+    
+} catch (\Throwable $e) {
+    fwrite(STDERR, "\033[0;31m❌ PEST execution failed:\033[0m\n");
+    fwrite(STDERR, "Error: " . $e->getMessage() . "\n");
+    fwrite(STDERR, "File: " . $e->getFile() . ":" . $e->getLine() . "\n");
+    
+    if (in_array('--debug', $_SERVER['argv'] ?? [])) {
+        fwrite(STDERR, "\nStack trace:\n" . $e->getTraceAsString() . "\n");
+    } else {
+        fwrite(STDERR, "\nTip: Add --debug for more details\n");
+    }
+    
+    exit(1);
+}
