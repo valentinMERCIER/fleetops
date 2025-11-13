@@ -53,29 +53,80 @@ class OrderImportService
 
     /**
      * Common field mapping patterns for auto-detection
+     * Maps Order field names to possible CSV header variations
      */
     protected array $commonMappings = [
         // Customer fields
-        'customer_name' => ['customer', 'client', 'name', 'customer_name', 'client_name', 'contact_name'],
-        'customer_phone' => ['phone', 'telephone', 'mobile', 'contact', 'customer_phone', 'contact_phone'],
-        'customer_email' => ['email', 'e-mail', 'mail', 'customer_email', 'contact_email'],
+        'customer_name' => [
+            'customer', 'client', 'name', 'customer_name', 'client_name', 
+            'consignee', 'recipient', 'receiver', 'contact_name', 'full_name',
+            'shipper', 'sender_name', 'customer name', 'client name'
+        ],
+        'customer_phone' => [
+            'phone', 'telephone', 'mobile', 'contact', 'customer_phone', 
+            'tel', 'cell', 'phone_number', 'contact_number', 'cellphone',
+            'mobile_number', 'whatsapp', 'customer phone', 'phone number'
+        ],
+        'customer_email' => [
+            'email', 'e-mail', 'mail', 'customer_email', 'emailaddress',
+            'email_address', 'contact_email', 'e_mail_address', 'customer email',
+            'email address'
+        ],
         
         // Address fields
-        'pickup_address' => ['pickup', 'origin', 'from', 'pickup_address', 'collection', 'pickup_location'],
-        'dropoff_address' => ['dropoff', 'destination', 'to', 'delivery', 'dropoff_address', 'delivery_address'],
+        'pickup_address' => [
+            'pickup', 'origin', 'from', 'pickup_address', 'collection',
+            'sender_address', 'pickup_location', 'from_address', 'source',
+            'collection_address', 'pickup_point', 'pickup address', 'pickup location'
+        ],
+        'dropoff_address' => [
+            'dropoff', 'destination', 'to', 'delivery', 'dropoff_address',
+            'recipient_address', 'delivery_address', 'drop_off', 'deliver_to',
+            'shipping_address', 'to_address', 'dropoff address', 'delivery address'
+        ],
+        'pickup_name' => [
+            'pickup_name', 'origin_name', 'sender', 'from_name', 'shipper_name',
+            'collection_contact', 'pickup_contact', 'pickup name'
+        ],
+        'dropoff_name' => [
+            'dropoff_name', 'recipient_name', 'receiver_name', 'delivery_name',
+            'consignee_name', 'to_name', 'dropoff name', 'recipient name'
+        ],
         
         // Order details
-        'scheduled_at' => ['scheduled', 'date', 'time', 'scheduled_at', 'delivery_date', 'pickup_date'],
-        'order_number' => ['order', 'reference', 'order_id', 'order_number', 'ref', 'tracking'],
-        'notes' => ['notes', 'comments', 'instructions', 'description', 'remarks'],
+        'scheduled_at' => [
+            'scheduled', 'date', 'time', 'scheduled_at', 'delivery_date',
+            'pickup_date', 'appointment', 'schedule_date', 'datetime',
+            'delivery_time', 'collection_date', 'scheduled at', 'delivery date'
+        ],
+        'reference' => [
+            'reference', 'ref', 'order_number', 'tracking', 'id', 'order_id',
+            'po_number', 'invoice', 'booking_number', 'reference_number',
+            'tracking_number', 'job_number', 'order number', 'tracking number'
+        ],
+        'notes' => [
+            'notes', 'comments', 'remarks', 'instructions', 'special_instructions',
+            'delivery_instructions', 'message', 'description', 'memo',
+            'special instructions', 'delivery instructions'
+        ],
         
         // Package details
-        'package_weight' => ['weight', 'package_weight', 'item_weight', 'kg', 'pounds'],
-        'package_dimensions' => ['dimensions', 'size', 'package_size', 'length_width_height'],
-        'package_value' => ['value', 'package_value', 'item_value', 'declared_value', 'price'],
-        
-        // Service type
-        'service_type' => ['service', 'service_type', 'delivery_type', 'shipping_type'],
+        'quantity' => [
+            'quantity', 'qty', 'packages', 'pieces', 'count', 'units',
+            'number_of_packages', 'parcel_count', 'items', 'package count'
+        ],
+        'weight' => [
+            'weight', 'kg', 'lbs', 'mass', 'total_weight', 'gross_weight',
+            'weight_kg', 'weight_lbs', 'kilograms', 'pounds'
+        ],
+        'type' => [
+            'type', 'service_type', 'order_type', 'delivery_type', 'service',
+            'shipment_type', 'category', 'service type', 'order type'
+        ],
+        'priority' => [
+            'priority', 'urgency', 'urgent', 'express', 'service_level',
+            'speed', 'rush'
+        ]
     ];
 
     /**
@@ -370,85 +421,191 @@ class OrderImportService
     // =============================================
 
     /**
-     * Map row fields according to template mappings and apply transformations
+     * Map CSV row to Order fields using template or auto-detection
      * 
      * @param array $row Raw row data from file
-     * @param ImportTemplate $template Import template with field mappings
+     * @param ImportTemplate|object|array|null $template Import template with field mappings (optional)
      * @return array Mapped and transformed data
      */
-    public function mapFields(array $row, ImportTemplate $template): array
+    public function mapFields(array $row, $template = null): array
     {
-        // TODO: Implement field mapping logic
-        // Apply template field_mappings
-        // Apply default values
-        // Return mapped array
+        // Get mappings from template or auto-detect
+        $mappings = [];
+        $autoDetected = false;
         
+        if ($template && !empty($template->field_mappings ?? [])) {
+            // Use template-defined mappings (handle both objects and arrays)
+            $mappings = is_object($template) ? ($template->field_mappings ?? []) : $template['field_mappings'];
+        } else {
+            // Auto-detect from row headers
+            $headers = array_keys($row);
+            $detected = $this->detectFieldMappings($headers);
+            $mappings = $detected['header_to_field'];
+            $autoDetected = true;
+        }
+        
+        // Apply mappings
         $mappedData = [];
-        $fieldMappings = $template->field_mappings ?? [];
-        $defaultValues = $template->default_values ?? [];
-        
-        // Apply field mappings
-        foreach ($fieldMappings as $csvColumn => $modelField) {
-            if (isset($row[$csvColumn])) {
-                $value = $row[$csvColumn];
-                $mappedData[$modelField] = $this->transformValue($value, $modelField, $template);
+        foreach ($mappings as $csvColumn => $orderField) {
+            if (isset($row[$csvColumn]) && $row[$csvColumn] !== '') {
+                $mappedData[$orderField] = $this->transformValue(
+                    $row[$csvColumn],
+                    $orderField,
+                    $template
+                );
             }
         }
         
-        // Apply default values for missing fields
-        foreach ($defaultValues as $field => $value) {
-            if (!isset($mappedData[$field]) || $mappedData[$field] === null || $mappedData[$field] === '') {
-                $mappedData[$field] = $value;
+        // Apply default values from template
+        $defaultValues = null;
+        if ($template) {
+            $defaultValues = is_object($template) ? ($template->default_values ?? []) : ($template['default_values'] ?? []);
+        }
+        
+        if ($defaultValues && !empty($defaultValues)) {
+            foreach ($defaultValues as $field => $defaultValue) {
+                if (!isset($mappedData[$field]) || $mappedData[$field] === '') {
+                    $mappedData[$field] = $defaultValue;
+                }
             }
         }
         
-        // Ensure company UUID is set
-        if (!isset($mappedData['company_uuid'])) {
-            $mappedData['company_uuid'] = $template->company_uuid;
+        // Ensure company UUID is set if template exists
+        if ($template && !isset($mappedData['company_uuid'])) {
+            $companyUuid = is_object($template) ? ($template->company_uuid ?? null) : ($template['company_uuid'] ?? null);
+            if ($companyUuid) {
+                $mappedData['company_uuid'] = $companyUuid;
+            }
         }
+        
+        // Add metadata about mapping
+        $templateName = null;
+        if ($template) {
+            $templateName = is_object($template) ? ($template->name ?? null) : ($template['name'] ?? null);
+        }
+        
+        $mappedData['_import_metadata'] = [
+            'auto_detected' => $autoDetected,
+            'mapped_fields' => array_keys($mappedData),
+            'template_used' => $templateName
+        ];
         
         return $mappedData;
     }
 
     /**
-     * Auto-detect field mappings from headers using pattern matching
+     * Map multiple rows efficiently using the same mappings
+     * 
+     * @param array $rows Array of raw row data
+     * @param ImportTemplate|null $template Import template (optional)
+     * @return array Array of mapped results
+     */
+    public function mapBatch(array $rows, ?ImportTemplate $template = null): array
+    {
+        if (empty($rows)) {
+            return [];
+        }
+        
+        // Detect mappings once for all rows
+        $firstRow = reset($rows);
+        $headers = array_keys($firstRow);
+        
+        // Get mappings (from template or auto-detect)
+        if ($template && !empty($template->field_mappings)) {
+            $mappings = $template->field_mappings;
+            $autoDetected = false;
+        } else {
+            $detected = $this->detectFieldMappings($headers);
+            $mappings = $detected['header_to_field'];
+            $autoDetected = true;
+        }
+        
+        // Process all rows with the same mappings
+        $results = [];
+        foreach ($rows as $index => $row) {
+            $mapped = [];
+            
+            foreach ($mappings as $csvColumn => $orderField) {
+                if (isset($row[$csvColumn]) && $row[$csvColumn] !== '') {
+                    $mapped[$orderField] = $this->transformValue(
+                        $row[$csvColumn],
+                        $orderField,
+                        $template
+                    );
+                }
+            }
+            
+            // Apply defaults
+            if ($template && !empty($template->default_values)) {
+                foreach ($template->default_values as $field => $defaultValue) {
+                    if (!isset($mapped[$field]) || $mapped[$field] === '') {
+                        $mapped[$field] = $defaultValue;
+                    }
+                }
+            }
+            
+            $results[] = [
+                'row_index' => $index,
+                'mapped_data' => $mapped,
+                'original_data' => $row,
+                'auto_detected' => $autoDetected
+            ];
+        }
+        
+        return $results;
+    }
+
+    /**
+     * Auto-detect field mappings from CSV headers
+     * Returns mappings with confidence scores
      * 
      * @param array $headers Column headers from file
-     * @return array Suggested mappings with confidence scores
+     * @return array Auto-detected mappings with confidence scores
      */
     public function detectFieldMappings(array $headers): array
     {
-        // TODO: Implement auto-detection algorithm
-        // Use $commonMappings patterns
-        // Return confidence scores
-        
-        $suggestions = [];
+        $detected = [];
+        $confidence = [];
+        $headerMappings = [];
         
         foreach ($headers as $header) {
-            $headerLower = strtolower(trim($header));
+            $normalized = $this->normalizeHeaderName($header);
             $bestMatch = null;
             $bestScore = 0;
             
             foreach ($this->commonMappings as $field => $patterns) {
                 foreach ($patterns as $pattern) {
-                    $score = $this->calculateSimilarity($headerLower, $pattern);
+                    $score = $this->calculateMatchScore($normalized, $pattern);
                     
-                    if ($score > $bestScore && $score > 0.7) { // 70% similarity threshold
+                    if ($score > $bestScore) {
                         $bestScore = $score;
                         $bestMatch = $field;
                     }
                 }
             }
             
-            if ($bestMatch) {
-                $suggestions[$header] = [
-                    'field' => $bestMatch,
-                    'confidence' => round($bestScore * 100, 2)
-                ];
+            // Only accept matches with confidence > 60%
+            if ($bestMatch && $bestScore >= 60) {
+                // Check if this field is already mapped with higher confidence
+                if (!isset($confidence[$bestMatch]) || $confidence[$bestMatch] < $bestScore) {
+                    // Remove previous mapping if exists
+                    if (isset($detected[$bestMatch])) {
+                        unset($headerMappings[$detected[$bestMatch]]);
+                    }
+                    
+                    $detected[$bestMatch] = $header;
+                    $confidence[$bestMatch] = $bestScore;
+                    $headerMappings[$header] = $bestMatch;
+                }
             }
         }
         
-        return $suggestions;
+        return [
+            'mappings' => $detected,
+            'confidence' => $confidence,
+            'unmapped' => array_diff($headers, array_keys($headerMappings)),
+            'header_to_field' => $headerMappings
+        ];
     }
 
     /**
@@ -459,36 +616,46 @@ class OrderImportService
      * @param ImportTemplate $template Import template
      * @return mixed Transformed value
      */
-    protected function transformValue($value, string $field, ImportTemplate $template)
+    /**
+     * Transform value based on field type and template specifications
+     * 
+     * @param mixed $value Raw value from CSV
+     * @param string $field Target field name
+     * @param ImportTemplate|object|array|null $template Import template (optional)
+     * @return mixed Transformed value
+     */
+    protected function transformValue($value, string $field, $template = null)
     {
-        // TODO: Implement data transformation
-        // Handle dates, phone numbers, etc.
-        // Apply template-specific formats
+        // Trim whitespace for strings
+        $value = is_string($value) ? trim($value) : $value;
         
-        if ($value === null || $value === '') {
+        // Return null for empty values
+        if ($value === '' || $value === null) {
             return null;
         }
         
-        // Apply field-specific transformations
-        switch ($field) {
-            case 'scheduled_at':
-            case 'pickup_date':
-            case 'delivery_date':
-                return $this->parseDateField($value);
+        // Apply field-specific transformations based on field name patterns
+        switch (true) {
+            case str_contains($field, '_at') || str_contains($field, 'date') || str_contains($field, 'time'):
+                return $this->parseDateField($value, $template);
                 
-            case 'customer_phone':
-            case 'contact_phone':
+            case str_contains($field, 'phone') || str_contains($field, 'mobile') || str_contains($field, 'tel'):
                 return $this->normalizePhoneNumber($value);
                 
-            case 'customer_email':
-            case 'contact_email':
-                return strtolower(trim($value));
+            case str_contains($field, 'email'):
+                return $this->normalizeEmail($value);
                 
-            case 'package_weight':
-                return $this->normalizeWeight($value);
+            case str_contains($field, 'quantity') || str_contains($field, 'qty') || str_contains($field, 'count'):
+                return $this->parseNumericValue($value);
                 
-            case 'package_value':
-                return $this->normalizePrice($value);
+            case str_contains($field, 'weight'):
+                return $this->parseWeight($value);
+                
+            case str_contains($field, 'address') || str_contains($field, 'pickup') || str_contains($field, 'dropoff'):
+                return $this->normalizeAddress($value);
+                
+            case str_contains($field, 'name'):
+                return $this->normalizeName($value);
                 
             default:
                 return is_string($value) ? trim($value) : $value;
@@ -499,46 +666,151 @@ class OrderImportService
      * Parse date field with multiple format support
      * 
      * @param string $value Date string
-     * @param string|null $format Specific format to try first
-     * @return Carbon|null Parsed date or null if parsing fails
+     * @param ImportTemplate|object|array|null $template Import template with date formats
+     * @return string|null Parsed date in Y-m-d H:i:s format or null if parsing fails
      */
-    protected function parseDateField(string $value, ?string $format = null): ?Carbon
+    protected function parseDateField(string $value, $template = null): ?string
     {
-        // TODO: Implement date parsing
-        // Handle multiple formats
-        // Return Carbon instance or null
-        
         if (empty(trim($value))) {
             return null;
         }
         
         $value = trim($value);
         
-        // Try specific format first if provided
-        if ($format) {
-            try {
-                return Carbon::createFromFormat($format, $value);
-            } catch (Exception $e) {
-                // Fall through to try other formats
-            }
-        }
-        
-        // Try common date formats
-        foreach ($this->dateFormats as $dateFormat) {
-            try {
-                return Carbon::createFromFormat($dateFormat, $value);
-            } catch (Exception $e) {
-                continue;
-            }
-        }
-        
-        // Try Carbon's flexible parser as last resort
         try {
-            return Carbon::parse($value);
+            // Check template for specific date formats first
+            $dateFormats = null;
+            if ($template) {
+                $dateFormats = is_object($template) ? ($template->date_formats ?? null) : ($template['date_formats'] ?? null);
+            }
+            
+            if ($dateFormats) {
+                foreach ($dateFormats as $format) {
+                    try {
+                        $date = Carbon::createFromFormat($format, $value);
+                        return $date->format('Y-m-d H:i:s');
+                    } catch (Exception $e) {
+                        continue;
+                    }
+                }
+            }
+            
+            // Try common date formats
+            foreach ($this->dateFormats as $dateFormat) {
+                try {
+                    $date = Carbon::createFromFormat($dateFormat, $value);
+                    // Reset seconds and microseconds for date-only formats
+                    if (!str_contains($dateFormat, 'H:i:s')) {
+                        $date->setTime(0, 0, 0);
+                    }
+                    return $date->format('Y-m-d H:i:s');
+                } catch (Exception $e) {
+                    continue;
+                }
+            }
+            
+            // Last resort: let Carbon parse naturally
+            $date = Carbon::parse($value);
+            // If only date provided, set time to 00:00:00
+            if (!str_contains($value, ':')) {
+                $date->setTime(0, 0, 0);
+            }
+            return $date->format('Y-m-d H:i:s');
+            
         } catch (Exception $e) {
             Log::warning("Failed to parse date", ['value' => $value]);
             return null;
         }
+    }
+
+    /**
+     * Normalize email address
+     * 
+     * @param string $email Raw email address
+     * @return string|null Valid email or null if invalid
+     */
+    protected function normalizeEmail(string $email): ?string
+    {
+        $email = strtolower(trim($email));
+        
+        if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return $email;
+        }
+        
+        return null;
+    }
+
+    /**
+     * Parse numeric value from string
+     * 
+     * @param mixed $value Raw value
+     * @return int|null Parsed integer or null
+     */
+    protected function parseNumericValue($value): ?int
+    {
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+        
+        // Try to extract number from string
+        if (is_string($value)) {
+            preg_match('/\d+/', $value, $matches);
+            return isset($matches[0]) ? (int) $matches[0] : null;
+        }
+        
+        return null;
+    }
+
+    /**
+     * Parse weight value (extract numeric part)
+     * 
+     * @param mixed $value Raw weight value
+     * @return float|null Parsed weight or null
+     */
+    protected function parseWeight($value): ?float
+    {
+        if (is_numeric($value)) {
+            return (float) $value;
+        }
+        
+        if (is_string($value)) {
+            // Extract numeric value from strings like "10.5 kg" or "23 lbs"
+            preg_match('/[\d.]+/', $value, $matches);
+            return isset($matches[0]) ? (float) $matches[0] : null;
+        }
+        
+        return null;
+    }
+
+    /**
+     * Normalize address string
+     * 
+     * @param string $address Raw address
+     * @return string Cleaned address
+     */
+    protected function normalizeAddress(string $address): string
+    {
+        // Clean up common address issues
+        $address = trim($address);
+        $address = preg_replace('/\s+/', ' ', $address); // Multiple spaces to single
+        $address = str_replace(['\n', '\r', '\t'], ' ', $address); // Remove line breaks
+        
+        return $address;
+    }
+
+    /**
+     * Normalize name string
+     * 
+     * @param string $name Raw name
+     * @return string Properly formatted name
+     */
+    protected function normalizeName(string $name): string
+    {
+        $name = trim($name);
+        // Remove multiple spaces
+        $name = preg_replace('/\s+/', ' ', $name);
+        // Convert to Title Case
+        return ucwords(strtolower($name));
     }
 
     // ==========================================
@@ -1302,6 +1574,59 @@ class OrderImportService
     }
 
     /**
+     * Calculate match score between header and pattern
+     * Returns score from 0-100
+     * 
+     * @param string $normalized Normalized header name
+     * @param string $pattern Pattern to match against
+     * @return int Score from 0-100
+     */
+    protected function calculateMatchScore(string $normalized, string $pattern): int
+    {
+        $patternNormalized = $this->normalizeHeaderName($pattern);
+        
+        // Exact match = 100%
+        if ($normalized === $patternNormalized) {
+            return 100;
+        }
+        
+        // Pattern is contained in header = 85%
+        if (str_contains($normalized, $patternNormalized)) {
+            return 85;
+        }
+        
+        // Header is contained in pattern = 75%
+        if (str_contains($patternNormalized, $normalized)) {
+            return 75;
+        }
+        
+        // Calculate similarity percentage
+        similar_text($normalized, $patternNormalized, $percent);
+        
+        // If similarity > 70%, return adjusted score
+        if ($percent > 70) {
+            return (int) ($percent * 0.8); // Scale down slightly
+        }
+        
+        return 0;
+    }
+
+    /**
+     * Normalize header name for comparison
+     * Removes special characters, spaces, and converts to lowercase
+     * 
+     * @param string $header Header name to normalize
+     * @return string Normalized header name
+     */
+    protected function normalizeHeaderName(string $header): string
+    {
+        $normalized = strtolower(trim($header));
+        // Remove special characters but keep alphanumeric
+        $normalized = preg_replace('/[^a-z0-9]/', '', $normalized);
+        return $normalized;
+    }
+
+    /**
      * Calculate similarity between two strings
      * 
      * @param string $str1
@@ -1328,15 +1653,21 @@ class OrderImportService
      */
     protected function normalizePhoneNumber(string $phone): string
     {
-        // Remove all non-digit characters
-        $digits = preg_replace('/[^\d]/', '', $phone);
+        // Remove all non-numeric characters except +
+        $cleaned = preg_replace('/[^0-9+]/', '', $phone);
         
-        // Basic formatting (can be enhanced based on requirements)
-        if (strlen($digits) >= 10) {
-            return $digits;
+        // If empty after cleaning, return original
+        if (empty($cleaned)) {
+            return $phone;
         }
         
-        return $phone; // Return original if can't normalize
+        // Basic validation (10-15 digits)
+        $digitsOnly = preg_replace('/[^0-9]/', '', $cleaned);
+        if (strlen($digitsOnly) < 10 || strlen($digitsOnly) > 15) {
+            return $phone; // Return original if invalid length
+        }
+        
+        return $cleaned;
     }
 
     /**
