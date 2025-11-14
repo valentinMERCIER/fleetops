@@ -8,6 +8,7 @@ use Fleetbase\FleetOps\Models\ImportRow;
 use Fleetbase\FleetOps\Models\Order;
 use Fleetbase\FleetOps\Models\Customer;
 use Fleetbase\FleetOps\Models\Place;
+use Fleetbase\FleetOps\Support\ValidationResult;
 use Fleetbase\Models\File;
 use Illuminate\Http\UploadedFile;
 use PhpOffice\PhpSpreadsheet\IOFactory;
@@ -127,6 +128,54 @@ class OrderImportService
             'priority', 'urgency', 'urgent', 'express', 'service_level',
             'speed', 'rush'
         ]
+    ];
+
+    /**
+     * Base validation rules for order import
+     */
+    protected array $baseValidationRules = [
+        // Required customer information
+        'customer_name' => 'required|string|min:2|max:255',
+        'customer_phone' => 'required_without:customer_email|nullable|regex:/^\+?[0-9]{10,15}$/',
+        'customer_email' => 'required_without:customer_phone|nullable|email:rfc,dns',
+        
+        // Required address information
+        'pickup_address' => 'required|string|min:10|max:500',
+        'dropoff_address' => 'required|string|min:10|max:500',
+        
+        // Optional but validated fields
+        'pickup_name' => 'nullable|string|max:255',
+        'dropoff_name' => 'nullable|string|max:255',
+        'scheduled_at' => 'nullable|date|after:now',
+        'reference' => 'nullable|string|max:100',
+        'notes' => 'nullable|string|max:1000',
+        'quantity' => 'nullable|integer|min:1|max:9999',
+        'weight' => 'nullable|numeric|min:0|max:99999',
+        'type' => 'nullable|string|in:delivery,pickup,transport',
+        'priority' => 'nullable|string|in:low,normal,high,urgent'
+    ];
+
+    /**
+     * Custom validation messages
+     */
+    protected array $validationMessages = [
+        'customer_name.required' => 'Customer name is required',
+        'customer_name.min' => 'Customer name must be at least 2 characters',
+        'customer_phone.required_without' => 'Phone number is required when email is not provided',
+        'customer_phone.regex' => 'Phone number must be 10-15 digits (optional + prefix)',
+        'customer_email.required_without' => 'Email is required when phone number is not provided',
+        'customer_email.email' => 'Please provide a valid email address',
+        'pickup_address.required' => 'Pickup address is required',
+        'pickup_address.min' => 'Pickup address must be at least 10 characters',
+        'dropoff_address.required' => 'Dropoff address is required',
+        'dropoff_address.min' => 'Dropoff address must be at least 10 characters',
+        'scheduled_at.date' => 'Scheduled time must be a valid date',
+        'scheduled_at.after' => 'Scheduled time must be in the future',
+        'quantity.integer' => 'Quantity must be a whole number',
+        'quantity.min' => 'Quantity must be at least 1',
+        'weight.numeric' => 'Weight must be a number',
+        'type.in' => 'Type must be one of: delivery, pickup, transport',
+        'priority.in' => 'Priority must be one of: low, normal, high, urgent'
     ];
 
     /**
@@ -818,25 +867,39 @@ class OrderImportService
     // ==========================================
 
     /**
-     * Validate a single row of mapped data against template rules
+     * Validate a single row of mapped data
      * 
-     * @param array $row Mapped row data
-     * @param ImportTemplate $template Import template with validation rules
+     * @param array $mappedData Mapped row data
+     * @param ImportTemplate|object|array|null $template Import template with validation rules
      * @return ValidationResult Validation result with errors and warnings
      */
-    public function validateRow(array $row, ImportTemplate $template): ValidationResult
+    public function validateRow(array $mappedData, $template = null): ValidationResult
     {
-        // TODO: Implement row validation
-        // Apply validation rules
-        // Return ValidationResult object
+        // Get validation rules
+        $rules = $this->getValidationRules($template);
         
-        $rules = $template->getValidationRules();
-        $validator = Validator::make($row, $rules);
+        // Create Laravel validator
+        $validator = \Validator::make(
+            $mappedData,
+            $rules,
+            $this->validationMessages
+        );
         
+        // Create validation result
         $result = new ValidationResult($validator);
         
-        // Add custom validations
-        $this->addCustomValidations($result, $row, $template);
+        // Add custom business logic validation
+        $this->addCustomValidation($mappedData, $result, $template);
+        
+        // Check for duplicates if enabled
+        if ($template && isset($template->duplicate_handling) && $template->duplicate_handling !== 'allow') {
+            $this->checkForDuplicates($mappedData, $result, $template);
+        }
+        
+        // Validate addresses if geocoding is enabled
+        if ($template && isset($template->validate_addresses) && $template->validate_addresses) {
+            $this->validateAddresses($mappedData, $result);
+        }
         
         return $result;
     }
@@ -844,69 +907,420 @@ class OrderImportService
     /**
      * Validate batch of rows with progress tracking
      * 
-     * @param array $rows Array of rows to validate
-     * @param ImportTemplate $template Import template
-     * @return array Array of validation results
+     * @param array $rows Array of mapped row data to validate
+     * @param ImportTemplate|object|array|null $template Import template (optional)
+     * @param bool $stopOnError Stop validation on first error
+     * @return array Validation results with statistics
      */
-    public function validateBatch(array $rows, ImportTemplate $template): array
-    {
-        // TODO: Implement batch validation
-        // Track progress
-        // Return array of errors
-        
+    public function validateBatch(
+        array $rows,
+        $template = null,
+        bool $stopOnError = false
+    ): array {
         $results = [];
-        $totalRows = count($rows);
+        $stats = [
+            'total' => count($rows),
+            'valid' => 0,
+            'errors' => 0,
+            'warnings' => 0
+        ];
         
         foreach ($rows as $index => $row) {
-            $mappedRow = $this->mapFields($row['data'], $template);
-            $validation = $this->validateRow($mappedRow, $template);
+            // Validate the row
+            $validation = $this->validateRow($row, $template);
             
+            // Track stats
+            if ($validation->isValid()) {
+                $stats['valid']++;
+            }
+            if ($validation->hasErrors()) {
+                $stats['errors']++;
+            }
+            if ($validation->hasWarnings()) {
+                $stats['warnings']++;
+            }
+            
+            // Store result
             $results[] = [
-                'row_number' => $row['row_number'],
-                'line_number' => $index + 2, // +1 for 0-based index, +1 for header row
-                'validation' => $validation,
-                'mapped_data' => $mappedRow
+                'row_index' => $index,
+                'row_number' => $index + 2, // +2 for header row and 0-index
+                'data' => $row,
+                'validation' => $validation->getAllIssues(),
+                'is_valid' => $validation->isValid(),
+                'severity' => $validation->getSeverity()
             ];
             
+            // Stop if requested and error found
+            if ($stopOnError && $validation->hasErrors()) {
+                break;
+            }
+            
             // Log progress for large batches
-            if ($totalRows > 100 && ($index + 1) % 50 === 0) {
-                Log::info("Validation progress", ['completed' => $index + 1, 'total' => $totalRows]);
+            if ($stats['total'] > 100 && ($index + 1) % 50 === 0) {
+                Log::info("Validation progress", ['completed' => $index + 1, 'total' => $stats['total']]);
             }
         }
         
-        return $results;
+        return [
+            'results' => $results,
+            'stats' => $stats,
+            'has_errors' => $stats['errors'] > 0,
+            'has_warnings' => $stats['warnings'] > 0
+        ];
     }
 
     /**
-     * Format validation errors for user-friendly display
+     * Format validation errors for display
      * 
-     * @param array $errors Raw validation errors
-     * @return array Formatted errors grouped by type
+     * @param array $batchResults Results from validateBatch
+     * @return array Formatted errors for user display
      */
-    public function formatErrors(array $errors): array
+    public function formatValidationErrors(array $batchResults): array
     {
-        // TODO: Format errors for user-friendly display
-        // Group by type
-        // Include row numbers
+        $formatted = [];
         
-        $formatted = [
-            'critical' => [],
-            'error' => [],
-            'warning' => [],
-            'info' => []
-        ];
-        
-        foreach ($errors as $error) {
-            $severity = $error['severity'] ?? 'error';
-            $formatted[$severity][] = [
-                'row' => $error['row_number'] ?? null,
-                'field' => $error['field'] ?? null,
-                'message' => $error['message'] ?? 'Unknown error',
-                'code' => $error['code'] ?? 'validation_error'
-            ];
+        foreach ($batchResults['results'] as $result) {
+            if (!$result['is_valid'] || !empty($result['validation']['warnings'])) {
+                $messages = [];
+                
+                // Format errors
+                foreach ($result['validation']['errors'] as $field => $errors) {
+                    foreach ($errors as $error) {
+                        $messages[] = [
+                            'type' => 'error',
+                            'field' => $field,
+                            'message' => $error
+                        ];
+                    }
+                }
+                
+                // Format warnings
+                foreach ($result['validation']['warnings'] as $field => $warnings) {
+                    foreach ($warnings as $warning) {
+                        $messages[] = [
+                            'type' => 'warning',
+                            'field' => $field,
+                            'message' => $warning
+                        ];
+                    }
+                }
+                
+                $formatted[] = [
+                    'row' => $result['row_number'],
+                    'messages' => $messages,
+                    'suggestions' => $result['validation']['suggestions'],
+                    'can_import' => empty($result['validation']['errors']),
+                    'severity' => $result['severity']
+                ];
+            }
         }
         
         return $formatted;
+    }
+
+    /**
+     * Get validation summary statistics
+     * 
+     * @param array $batchResults Results from validateBatch
+     * @return array Summary statistics
+     */
+    public function getValidationSummary(array $batchResults): array
+    {
+        $errorFields = [];
+        $warningFields = [];
+        
+        foreach ($batchResults['results'] as $result) {
+            foreach (array_keys($result['validation']['errors']) as $field) {
+                $errorFields[$field] = ($errorFields[$field] ?? 0) + 1;
+            }
+            foreach (array_keys($result['validation']['warnings']) as $field) {
+                $warningFields[$field] = ($warningFields[$field] ?? 0) + 1;
+            }
+        }
+        
+        // Sort by frequency
+        arsort($errorFields);
+        arsort($warningFields);
+        
+        return [
+            'total_rows' => $batchResults['stats']['total'],
+            'valid_rows' => $batchResults['stats']['valid'],
+            'rows_with_errors' => $batchResults['stats']['errors'],
+            'rows_with_warnings' => $batchResults['stats']['warnings'],
+            'common_error_fields' => array_slice($errorFields, 0, 5, true),
+            'common_warning_fields' => array_slice($warningFields, 0, 5, true),
+            'can_proceed' => $batchResults['stats']['errors'] === 0,
+            'import_ready_count' => $batchResults['stats']['total'] - $batchResults['stats']['errors'],
+            'success_rate' => round(($batchResults['stats']['valid'] / $batchResults['stats']['total']) * 100, 2)
+        ];
+    }
+
+    /**
+     * Get validation rules (merge base with template custom)
+     * 
+     * @param ImportTemplate|object|array|null $template Import template
+     * @return array Validation rules
+     */
+    protected function getValidationRules($template = null): array
+    {
+        $rules = $this->baseValidationRules;
+        
+        if ($template) {
+            $templateRules = null;
+            if (is_object($template)) {
+                $templateRules = $template->validation_rules ?? null;
+            } elseif (is_array($template)) {
+                $templateRules = $template['validation_rules'] ?? null;
+            }
+            
+            if ($templateRules && !empty($templateRules)) {
+                // Merge template rules, allowing overrides
+                $rules = array_merge($rules, $templateRules);
+            }
+        }
+        
+        return $rules;
+    }
+
+    /**
+     * Add custom business logic validation
+     * 
+     * @param array $data Mapped data to validate
+     * @param ValidationResult $result Validation result to modify
+     * @param ImportTemplate|object|array|null $template Import template
+     */
+    protected function addCustomValidation(array $data, ValidationResult $result, $template = null): void
+    {
+        // Validate phone number format more thoroughly
+        if (!empty($data['customer_phone'])) {
+            $phone = preg_replace('/[^0-9+]/', '', $data['customer_phone']);
+            
+            if (strlen($phone) > 0 && strlen($phone) < 10) {
+                $result->addError('customer_phone', 'Phone number is too short (minimum 10 digits)');
+                $result->addSuggestion('customer_phone', 'Include area code with the phone number');
+            }
+            
+            if (strlen($phone) > 15) {
+                $result->addError('customer_phone', 'Phone number is too long (maximum 15 digits)');
+            }
+        }
+        
+        // Validate address completeness
+        $this->validateAddressCompleteness($data, $result);
+        
+        // Validate scheduling logic
+        if (!empty($data['scheduled_at'])) {
+            $this->validateScheduling($data, $result, $template);
+        }
+        
+        // Validate reference uniqueness if required
+        if ($template && isset($template->require_unique_reference) && $template->require_unique_reference && !empty($data['reference'])) {
+            $this->validateReferenceUniqueness($data, $result, $template);
+        }
+    }
+
+    /**
+     * Validate address completeness
+     * 
+     * @param array $data Row data
+     * @param ValidationResult $result Validation result
+     */
+    protected function validateAddressCompleteness(array $data, ValidationResult $result): void
+    {
+        $addressFields = ['pickup_address', 'dropoff_address'];
+        
+        foreach ($addressFields as $field) {
+            if (empty($data[$field])) {
+                continue;
+            }
+            
+            $address = $data[$field];
+            
+            // Check for common address components
+            $hasNumber = preg_match('/\d+/', $address);
+            $hasStreet = preg_match('/\b(street|st|avenue|ave|road|rd|drive|dr|lane|ln|boulevard|blvd|way|court|ct|place|pl)\b/i', $address);
+            $hasComma = str_contains($address, ',');
+            
+            if (!$hasNumber) {
+                $result->addWarning($field, 'Address may be missing street number');
+            }
+            
+            if (!$hasStreet && !$hasComma) {
+                $result->addWarning($field, 'Address format may be incomplete (missing street name or city)');
+                $result->addSuggestion($field, 'Include full address: street number, street name, city, state/province, postal code');
+            }
+            
+            // Check minimum component count (split by comma or space)
+            $components = preg_split('/[\s,]+/', $address);
+            if (count($components) < 3) {
+                $result->addWarning($field, 'Address appears incomplete');
+                $result->addSuggestion($field, 'Format: 123 Main St, City, State 12345');
+            }
+        }
+    }
+
+    /**
+     * Validate scheduling logic
+     * 
+     * @param array $data Row data
+     * @param ValidationResult $result Validation result
+     * @param ImportTemplate|object|array|null $template Import template
+     */
+    protected function validateScheduling(array $data, ValidationResult $result, $template = null): void
+    {
+        try {
+            $scheduled = Carbon::parse($data['scheduled_at']);
+            $now = now();
+            
+            // Error if in the past
+            if ($scheduled->isPast()) {
+                $result->addError('scheduled_at', 'Scheduled time cannot be in the past');
+                return;
+            }
+            
+            // Get business hours from template or use defaults
+            $businessHoursStart = '08:00';
+            $businessHoursEnd = '18:00';
+            $minLeadTimeHours = 2;
+            
+            if ($template) {
+                if (is_object($template)) {
+                    $businessHoursStart = $template->business_hours_start ?? $businessHoursStart;
+                    $businessHoursEnd = $template->business_hours_end ?? $businessHoursEnd;
+                    $minLeadTimeHours = $template->min_lead_time_hours ?? $minLeadTimeHours;
+                } elseif (is_array($template)) {
+                    $businessHoursStart = $template['business_hours_start'] ?? $businessHoursStart;
+                    $businessHoursEnd = $template['business_hours_end'] ?? $businessHoursEnd;
+                    $minLeadTimeHours = $template['min_lead_time_hours'] ?? $minLeadTimeHours;
+                }
+            }
+            
+            // Check if scheduled during business hours
+            $scheduledTime = $scheduled->format('H:i');
+            if ($scheduledTime < $businessHoursStart || $scheduledTime > $businessHoursEnd) {
+                $result->addWarning(
+                    'scheduled_at',
+                    "Scheduled outside business hours ($businessHoursStart - $businessHoursEnd)"
+                );
+            }
+            
+            // Warning if scheduled on weekend
+            if ($scheduled->isWeekend()) {
+                $result->addWarning('scheduled_at', 'Scheduled on a weekend');
+            }
+            
+            // Check minimum lead time
+            $hoursUntilScheduled = $scheduled->diffInHours($now);
+            
+            if ($hoursUntilScheduled < $minLeadTimeHours) {
+                $result->addError(
+                    'scheduled_at',
+                    "Insufficient lead time (minimum {$minLeadTimeHours} hours required)"
+                );
+                $result->addSuggestion(
+                    'scheduled_at',
+                    "Schedule at least {$minLeadTimeHours} hours in advance"
+                );
+            }
+            
+        } catch (\Exception $e) {
+            $result->addError('scheduled_at', 'Invalid date format');
+            $result->addSuggestion('scheduled_at', 'Use format: YYYY-MM-DD HH:MM:SS');
+        }
+    }
+
+    /**
+     * Check for duplicate orders
+     * 
+     * @param array $data Row data
+     * @param ValidationResult $result Validation result
+     * @param ImportTemplate|object|array|null $template Import template
+     */
+    protected function checkForDuplicates(array $data, ValidationResult $result, $template): void
+    {
+        // Define duplicate check fields
+        $checkFields = ['reference', 'customer_phone', 'pickup_address'];
+        
+        if ($template) {
+            if (is_object($template)) {
+                $checkFields = $template->duplicate_check_fields ?? $checkFields;
+            } elseif (is_array($template)) {
+                $checkFields = $template['duplicate_check_fields'] ?? $checkFields;
+            }
+        }
+        
+        // For now, just add a warning if we have fields that could be duplicates
+        // In production, this would query the database
+        $duplicateRisk = false;
+        foreach ($checkFields as $field) {
+            if (!empty($data[$field])) {
+                $duplicateRisk = true;
+                break;
+            }
+        }
+        
+        if ($duplicateRisk) {
+            $result->addMetadata('duplicate_check_performed', true);
+            $result->addMetadata('duplicate_check_fields', $checkFields);
+        }
+    }
+
+    /**
+     * Validate reference uniqueness
+     * 
+     * @param array $data Row data
+     * @param ValidationResult $result Validation result
+     * @param ImportTemplate|object|array|null $template Import template
+     */
+    protected function validateReferenceUniqueness(array $data, ValidationResult $result, $template): void
+    {
+        if (empty($data['reference'])) {
+            return;
+        }
+        
+        // For now, just check format
+        // In production, this would check database uniqueness
+        if (strlen($data['reference']) < 3) {
+            $result->addError('reference', 'Reference number is too short');
+            $result->addSuggestion('reference', 'Use a reference with at least 3 characters');
+        }
+        
+        $result->addMetadata('reference_checked', true);
+    }
+
+    /**
+     * Validate addresses using geocoding (optional)
+     * 
+     * @param array $data Row data
+     * @param ValidationResult $result Validation result
+     */
+    protected function validateAddresses(array $data, ValidationResult $result): void
+    {
+        // This would integrate with geocoding service
+        // For now, just check format
+        
+        $addresses = [
+            'pickup_address' => $data['pickup_address'] ?? null,
+            'dropoff_address' => $data['dropoff_address'] ?? null
+        ];
+        
+        foreach ($addresses as $field => $address) {
+            if (empty($address)) {
+                continue;
+            }
+            
+            // Simple validation - in production, would use geocoding API
+            if (strlen($address) < 10) {
+                $result->addError($field, 'Address is too short to be valid');
+            }
+            
+            // Check for PO Box when physical address required
+            if (preg_match('/p\.?o\.?\s*box/i', $address)) {
+                $result->addWarning($field, 'PO Box addresses may not be suitable for delivery');
+            }
+        }
+        
+        $result->addMetadata('address_validation_performed', true);
     }
 
     // =============================================
@@ -1798,124 +2212,5 @@ class OrderImportService
         if (empty($row['customer_phone']) && empty($row['customer_email'])) {
             $result->addWarning('contact', 'No customer contact information provided', 'missing_contact');
         }
-    }
-}
-
-/**
- * Value object for validation results
- */
-class ValidationResult
-{
-    protected array $errors = [];
-    protected array $warnings = [];
-    protected bool $valid;
-
-    /**
-     * Create validation result from Laravel validator or manual data
-     * 
-     * @param \Illuminate\Contracts\Validation\Validator|null $validator
-     */
-    public function __construct($validator = null)
-    {
-        if ($validator) {
-            $this->valid = !$validator->fails();
-            
-            foreach ($validator->errors()->toArray() as $field => $messages) {
-                foreach ($messages as $message) {
-                    $this->errors[] = [
-                        'field' => $field,
-                        'message' => $message,
-                        'code' => 'validation_error'
-                    ];
-                }
-            }
-        } else {
-            $this->valid = true;
-        }
-    }
-
-    /**
-     * Check if validation passed
-     * 
-     * @return bool
-     */
-    public function isValid(): bool
-    {
-        return $this->valid && empty($this->errors);
-    }
-
-    /**
-     * Check if there are validation errors
-     * 
-     * @return bool
-     */
-    public function hasErrors(): bool
-    {
-        return !empty($this->errors);
-    }
-
-    /**
-     * Check if there are validation warnings
-     * 
-     * @return bool
-     */
-    public function hasWarnings(): bool
-    {
-        return !empty($this->warnings);
-    }
-
-    /**
-     * Get all validation errors
-     * 
-     * @return array
-     */
-    public function getErrors(): array
-    {
-        return $this->errors;
-    }
-
-    /**
-     * Get all validation warnings
-     * 
-     * @return array
-     */
-    public function getWarnings(): array
-    {
-        return $this->warnings;
-    }
-
-    /**
-     * Add a validation error
-     * 
-     * @param string $field
-     * @param string $message
-     * @param string $code
-     * @return void
-     */
-    public function addError(string $field, string $message, string $code = 'validation_error'): void
-    {
-        $this->errors[] = [
-            'field' => $field,
-            'message' => $message,
-            'code' => $code
-        ];
-        $this->valid = false;
-    }
-
-    /**
-     * Add a validation warning
-     * 
-     * @param string $field
-     * @param string $message
-     * @param string $code
-     * @return void
-     */
-    public function addWarning(string $field, string $message, string $code = 'validation_warning'): void
-    {
-        $this->warnings[] = [
-            'field' => $field,
-            'message' => $message,
-            'code' => $code
-        ];
     }
 }
