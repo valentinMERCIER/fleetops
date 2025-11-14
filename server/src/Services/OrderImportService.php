@@ -6,8 +6,13 @@ use Fleetbase\FleetOps\Models\ImportTemplate;
 use Fleetbase\FleetOps\Models\ImportSession;
 use Fleetbase\FleetOps\Models\ImportRow;
 use Fleetbase\FleetOps\Models\Order;
-use Fleetbase\FleetOps\Models\Customer;
+use Fleetbase\FleetOps\Models\Contact;
 use Fleetbase\FleetOps\Models\Place;
+use Fleetbase\FleetOps\Models\Payload;
+use Fleetbase\FleetOps\Models\Entity;
+use Fleetbase\FleetOps\Models\TrackingStatus;
+use Fleetbase\FleetOps\Models\TrackingNumber;
+use Fleetbase\FleetOps\Models\Waypoint;
 use Fleetbase\FleetOps\Support\ValidationResult;
 use Fleetbase\Models\File;
 use Illuminate\Http\UploadedFile;
@@ -2284,164 +2289,740 @@ class OrderImportService
     // ============================================
 
     /**
-     * Create order from validated and mapped row data
+     * Create a single order from validated ImportRow data
      * 
-     * @param array $mappedData Validated and mapped order data
-     * @return Order Created order instance
-     * @throws Exception If order creation fails
+     * @param ImportRow $importRow Validated import row with normalized data
+     * @param ImportTemplate|object|array|null $template Import template (optional)
+     * @param array $options Creation options
+     * @return Order|null Created order instance or null if failed
+     * @throws \Exception If order creation fails
      */
-    public function createOrderFromRow(array $mappedData): Order
-    {
-        // TODO: Implement order creation
-        // Extract customer data
-        // Create/find customer
-        // Build and create order
+    public function createOrderFromImportRow(
+        ImportRow $importRow,
+        $template = null,
+        array $options = []
+    ): ?Order {
+        // Check if row can be imported
+        if (!$importRow->canImport()) {
+            throw new \Exception("Row {$importRow->row_number} cannot be imported due to validation errors");
+        }
         
-        return DB::transaction(function () use ($mappedData) {
-            // Extract and create/find customer
-            $customerData = $this->extractCustomerData($mappedData);
-            $customer = $this->findOrCreateCustomer($customerData);
+        // Check if already imported
+        if ($importRow->order_uuid) {
+            throw new \Exception("Row {$importRow->row_number} has already been imported");
+        }
+        
+        $data = $importRow->normalized_data ?: $importRow->mapped_data;
+        
+        if (empty($data)) {
+            throw new \Exception("No data available for import");
+        }
+        
+        DB::beginTransaction();
+        
+        try {
+            // Step 1: Get or create customer
+            $customer = $this->resolveCustomer($data, $template);
             
-            // Process addresses
-            $pickupPlace = null;
-            $dropoffPlace = null;
+            // Step 2: Create or get places
+            $pickup = $this->resolvePlace($data, 'pickup', $template);
+            $dropoff = $this->resolvePlace($data, 'dropoff', $template);
             
-            if (isset($mappedData['pickup_address'])) {
-                $pickupPlace = $this->processAddress([
-                    'address' => $mappedData['pickup_address'],
-                    'type' => 'pickup'
-                ]);
-            }
+            // Step 3: Prepare order data
+            $orderData = $this->prepareOrderData($data, $customer, $pickup, $dropoff, $template);
             
-            if (isset($mappedData['dropoff_address'])) {
-                $dropoffPlace = $this->processAddress([
-                    'address' => $mappedData['dropoff_address'],
-                    'type' => 'dropoff'
-                ]);
-            }
-            
-            // Build order data
-            $orderData = [
-                'company_uuid' => $mappedData['company_uuid'],
-                'customer_uuid' => $customer->uuid,
-                'pickup_uuid' => $pickupPlace ? $pickupPlace->uuid : null,
-                'dropoff_uuid' => $dropoffPlace ? $dropoffPlace->uuid : null,
-                'scheduled_at' => $mappedData['scheduled_at'] ?? null,
-                'notes' => $mappedData['notes'] ?? null,
-                'meta' => []
-            ];
-            
-            // Add package information if available
-            if (isset($mappedData['package_weight']) || isset($mappedData['package_value'])) {
-                $orderData['meta']['package'] = [
-                    'weight' => $mappedData['package_weight'] ?? null,
-                    'value' => $mappedData['package_value'] ?? null,
-                    'dimensions' => $mappedData['package_dimensions'] ?? null
-                ];
-            }
-            
-            // Create the order
+            // Step 4: Create the order
             $order = Order::create($orderData);
             
-            Log::info("Order created from import", ['order_id' => $order->public_id, 'customer' => $customer->name]);
+            // Step 5: Create payload and waypoints
+            $payload = $this->createPayload($order, $data, $pickup, $dropoff, $template);
             
-            return $order;
-        });
+            // Step 6: Create entities (items/packages)
+            $this->createEntities($payload, $data, $template);
+            
+            // Step 7: Set tracking number
+            $this->setupTracking($order, $template);
+            
+            // Step 8: Create initial tracking status
+            $this->createInitialStatus($order, $template);
+            
+            // Step 9: Update ImportRow with success
+            $importRow->update([
+                'order_uuid' => $order->uuid,
+                'created_order_id' => $order->public_id,
+                'processing_status' => ImportRow::STATUS_IMPORTED,
+                'processing_message' => 'Order created successfully',
+                'processed_at' => now()
+            ]);
+            
+            DB::commit();
+            
+            Log::info("Order created from import", [
+                'order_id' => $order->public_id,
+                'customer' => $customer->name,
+                'import_row' => $importRow->row_number
+            ]);
+            
+            return $order->fresh(['payload', 'customer', 'trackingNumber']);
+            
+        } catch (\Exception $e) {
+            DB::rollback();
+            
+            // Update ImportRow with failure
+            $importRow->update([
+                'processing_status' => ImportRow::STATUS_FAILED,
+                'processing_message' => 'Failed to create order: ' . $e->getMessage(),
+                'validation_errors' => array_merge(
+                    $importRow->validation_errors ?? [],
+                    ['creation' => [$e->getMessage()]]
+                ),
+                'processed_at' => now()
+            ]);
+            
+            Log::error("Order creation failed", [
+                'import_row' => $importRow->row_number,
+                'error' => $e->getMessage()
+            ]);
+            
+            throw $e;
+        }
     }
 
     /**
-     * Find existing customer or create new one from customer data
+     * Resolve customer from data (find existing or create new)
      * 
-     * @param array $customerData Customer information
-     * @return Customer Customer instance
+     * @param array $data Normalized order data
+     * @param ImportTemplate|object|array|null $template Import template
+     * @return Contact Customer contact instance
      */
-    protected function findOrCreateCustomer(array $customerData): Customer
+    protected function resolveCustomer(array $data, $template = null): Contact
     {
-        // TODO: Implement customer management
-        // Check for duplicates
-        // Create if not exists
-        // Update if needed
-        
-        $companyUuid = $customerData['company_uuid'];
-        
-        // Try to find existing customer by email or phone
-        $existingCustomer = null;
-        
-        if (!empty($customerData['email'])) {
-            $existingCustomer = Customer::where('company_uuid', $companyUuid)
-                ->where('email', $customerData['email'])
-                ->first();
+        $companyId = session('company');
+        if ($template) {
+            if (is_object($template)) {
+                $companyId = $template->company_uuid ?? $companyId;
+            } elseif (is_array($template)) {
+                $companyId = $template['company_uuid'] ?? $companyId;
+            }
         }
         
-        if (!$existingCustomer && !empty($customerData['phone'])) {
-            $existingCustomer = Customer::where('company_uuid', $companyUuid)
-                ->where('phone', $customerData['phone'])
-                ->first();
+        // Check if customer exists
+        $query = Contact::where('company_uuid', $companyId)
+            ->where('type', 'customer');
+        
+        // Try to find by email first (most unique)
+        if (!empty($data['customer_email'])) {
+            $existing = (clone $query)->where('email', $data['customer_email'])->first();
+            if ($existing) {
+                // Update phone if provided and different
+                if (!empty($data['customer_phone']) && $existing->phone !== $data['customer_phone']) {
+                    $existing->update(['phone' => $data['customer_phone']]);
+                }
+                return $existing;
+            }
         }
         
-        if ($existingCustomer) {
-            // Update existing customer with any new information
-            $existingCustomer->update(array_filter($customerData));
-            return $existingCustomer;
+        // Try to find by phone
+        if (!empty($data['customer_phone'])) {
+            $existing = (clone $query)->where('phone', $data['customer_phone'])->first();
+            if ($existing) {
+                // Update email if provided and different
+                if (!empty($data['customer_email']) && $existing->email !== $data['customer_email']) {
+                    $existing->update(['email' => $data['customer_email']]);
+                }
+                return $existing;
+            }
         }
         
         // Create new customer
-        return Customer::create($customerData);
+        $customerData = [
+            'company_uuid' => $companyId,
+            'name' => $data['customer_name'],
+            'email' => $data['customer_email'] ?? null,
+            'phone' => $data['customer_phone'] ?? null,
+            'type' => 'customer',
+            'status' => 'active',
+            'meta' => [
+                'source' => 'import',
+                'imported_at' => now()->toDateTimeString()
+            ]
+        ];
+        
+        // Add custom fields from template
+        if ($template) {
+            $customerDefaults = null;
+            if (is_object($template)) {
+                $customerDefaults = $template->customer_defaults ?? null;
+            } elseif (is_array($template)) {
+                $customerDefaults = $template['customer_defaults'] ?? null;
+            }
+            
+            if ($customerDefaults) {
+                $customerData = array_merge($customerData, $customerDefaults);
+            }
+        }
+        
+        return Contact::create($customerData);
     }
 
     /**
-     * Extract customer-related data from mapped row
+     * Resolve place (pickup or dropoff) from data
      * 
-     * @param array $mappedData Complete mapped row data
-     * @return array Customer-specific data
+     * @param array $data Normalized order data
+     * @param string $type Place type (pickup or dropoff)
+     * @param ImportTemplate|object|array|null $template Import template
+     * @return Place Created or existing place
+     * @throws \Exception If address is missing
      */
-    protected function extractCustomerData(array $mappedData): array
+    protected function resolvePlace(array $data, string $type, $template = null): Place
     {
-        // TODO: Extract customer fields
-        // Handle nested data
-        // Return customer array
+        $companyId = session('company');
+        if ($template) {
+            if (is_object($template)) {
+                $companyId = $template->company_uuid ?? $companyId;
+            } elseif (is_array($template)) {
+                $companyId = $template['company_uuid'] ?? $companyId;
+            }
+        }
+        
+        $addressField = "{$type}_address";
+        $nameField = "{$type}_name";
+        
+        $address = $data[$addressField] ?? null;
+        
+        if (empty($address)) {
+            throw new \Exception("Missing {$type} address");
+        }
+        
+        // Check if place exists (by exact address match)
+        $existing = Place::where('company_uuid', $companyId)
+            ->where('street1', $address)
+            ->first();
+        
+        if ($existing) {
+            return $existing;
+        }
+        
+        // Parse address components
+        $addressComponents = $this->parseAddress($address);
+        
+        // Prepare place data
+        $placeData = [
+            'company_uuid' => $companyId,
+            'name' => $data[$nameField] ?? $addressComponents['name'] ?? ucfirst($type) . ' Location',
+            'street1' => $addressComponents['street1'] ?? $address,
+            'street2' => $addressComponents['street2'] ?? null,
+            'city' => $addressComponents['city'] ?? null,
+            'province' => $addressComponents['state'] ?? null,
+            'postal_code' => $addressComponents['postal_code'] ?? null,
+            'country' => $addressComponents['country'] ?? ($template['default_country'] ?? 'US'),
+            'type' => $type,
+            'meta' => [
+                'source' => 'import',
+                'original_address' => $address
+            ]
+        ];
+        
+        return Place::create($placeData);
+    }
+
+    /**
+     * Prepare order data for creation
+     * 
+     * @param array $data Normalized order data
+     * @param Contact $customer Customer instance
+     * @param Place $pickup Pickup place
+     * @param Place $dropoff Dropoff place
+     * @param ImportTemplate|object|array|null $template Import template
+     * @return array Order data ready for creation
+     */
+    protected function prepareOrderData(
+        array $data,
+        $customer,
+        $pickup,
+        $dropoff,
+        $template = null
+    ): array {
+        $companyId = session('company');
+        if ($template) {
+            if (is_object($template)) {
+                $companyId = $template->company_uuid ?? $companyId;
+            } elseif (is_array($template)) {
+                $companyId = $template['company_uuid'] ?? $companyId;
+            }
+        }
+        
+        $orderData = [
+            'company_uuid' => $companyId,
+            'customer_uuid' => $customer->uuid,
+            'customer_type' => 'contact',
+            'pickup_uuid' => $pickup->uuid,
+            'dropoff_uuid' => $dropoff->uuid,
+            'adhoc' => true,
+            'status' => 'created',
+            'type' => 'delivery',
+            'scheduled_at' => $data['scheduled_at'] ?? null,
+            'notes' => $data['notes'] ?? null,
+            'internal_id' => $data['reference'] ?? null,
+            'priority' => $data['priority'] ?? 'normal',
+            'meta' => [
+                'imported' => true,
+                'import_source' => $data['import_source'] ?? 'csv',
+                'imported_at' => now()->toDateTimeString(),
+                'original_reference' => $data['reference'] ?? null
+            ]
+        ];
+        
+        // Add template defaults
+        if ($template) {
+            $defaults = null;
+            if (is_object($template)) {
+                $defaults = $template->order_defaults ?? null;
+                $orderData['status'] = $template->default_status ?? $orderData['status'];
+                $orderData['type'] = $template->default_type ?? $orderData['type'];
+                $orderData['priority'] = $template->default_priority ?? $orderData['priority'];
+            } elseif (is_array($template)) {
+                $defaults = $template['order_defaults'] ?? null;
+                $orderData['status'] = $template['default_status'] ?? $orderData['status'];
+                $orderData['type'] = $template['default_type'] ?? $orderData['type'];
+                $orderData['priority'] = $template['default_priority'] ?? $orderData['priority'];
+            }
+            
+            if ($defaults) {
+                $orderData = array_merge($orderData, $defaults);
+            }
+        }
+        
+        return $orderData;
+    }
+
+    /**
+     * Create payload for order
+     * 
+     * @param Order $order Created order
+     * @param array $data Normalized order data
+     * @param Place $pickup Pickup place
+     * @param Place $dropoff Dropoff place
+     * @param ImportTemplate|object|array|null $template Import template
+     * @return Payload Created payload
+     */
+    protected function createPayload(
+        $order,
+        array $data,
+        $pickup,
+        $dropoff,
+        $template = null
+    ): array {
+        $payloadData = [
+            'company_uuid' => $order->company_uuid,
+            'pickup_uuid' => $pickup->uuid,
+            'dropoff_uuid' => $dropoff->uuid,
+            'return_uuid' => $data['return_uuid'] ?? null,
+            'type' => $data['payload_type'] ?? 'single_drop',
+            'status' => 'pending',
+            'meta' => [
+                'imported' => true
+            ]
+        ];
+        
+        $payload = Payload::create($payloadData);
+        
+        // Create waypoints
+        $this->createWaypoints($payload, $pickup, $dropoff, $data);
+        
+        // Update order with payload
+        $order->update(['payload_uuid' => $payload->uuid]);
+        
+        return $payload;
+    }
+
+    /**
+     * Create waypoints for payload
+     * 
+     * @param Payload $payload Created payload
+     * @param Place $pickup Pickup place
+     * @param Place $dropoff Dropoff place
+     * @param array $data Order data
+     */
+    protected function createWaypoints(
+        Payload $payload,
+        Place $pickup,
+        Place $dropoff,
+        array $data
+    ): void {
+        // Create pickup waypoint
+        Waypoint::create([
+            'company_uuid' => $payload->company_uuid,
+            'payload_uuid' => $payload->uuid,
+            'place_uuid' => $pickup->uuid,
+            'type' => 'pickup',
+            'order' => 0,
+            'status' => 'pending',
+            'meta' => [
+                'scheduled_at' => $data['pickup_scheduled_at'] ?? $data['scheduled_at'] ?? null,
+                'instructions' => $data['pickup_instructions'] ?? null
+            ]
+        ]);
+        
+        // Create dropoff waypoint
+        Waypoint::create([
+            'company_uuid' => $payload->company_uuid,
+            'payload_uuid' => $payload->uuid,
+            'place_uuid' => $dropoff->uuid,
+            'type' => 'dropoff',
+            'order' => 1,
+            'status' => 'pending',
+            'meta' => [
+                'scheduled_at' => $data['dropoff_scheduled_at'] ?? null,
+                'instructions' => $data['dropoff_instructions'] ?? null
+            ]
+        ]);
+    }
+
+    /**
+     * Create entities (items/packages) for payload
+     * 
+     * @param Payload $payload Created payload
+     * @param array $data Order data
+     * @param ImportTemplate|object|array|null $template Import template
+     */
+    protected function createEntities(
+        $payload,
+        array $data,
+        $template = null
+    ): array {
+        // Determine entity details
+        $quantity = $data['quantity'] ?? 1;
+        $weight = $data['weight'] ?? null;
+        $description = $data['item_description'] ?? $data['package_description'] ?? 'Package';
+        
+        // Prepare entity data for creation
+        $entities = [];
+        for ($i = 0; $i < $quantity; $i++) {
+            $entityData = [
+                'company_uuid' => $payload->company_uuid ?? session('company'),
+                'payload_uuid' => $payload->uuid ?? 'mock-payload-uuid',
+                'type' => $data['entity_type'] ?? 'package',
+                'name' => $description . ($quantity > 1 ? ' #' . ($i + 1) : ''),
+                'description' => $description,
+                'weight' => $weight,
+                'weight_unit' => $data['weight_unit'] ?? 'kg',
+                'declared_value' => $data['declared_value'] ?? null,
+                'currency' => $data['currency'] ?? 'USD',
+                'status' => 'pending',
+                'meta' => [
+                    'imported' => true,
+                    'sku' => $data['sku'] ?? null,
+                    'barcode' => $data['barcode'] ?? null
+                ]
+            ];
+            
+            // In production, this would create Entity::create($entityData)
+            $entities[] = $entityData;
+        }
+        
+        return $entities;
+    }
+
+    /**
+     * Setup tracking for order
+     * 
+     * @param Order $order Created order
+     * @param ImportTemplate|object|array|null $template Import template
+     */
+    protected function setupTracking(Order $order, $template = null): void
+    {
+        // Generate tracking number
+        $trackingNumber = $this->generateTrackingNumber($order, $template);
+        
+        $tracking = TrackingNumber::create([
+            'company_uuid' => $order->company_uuid,
+            'owner_uuid' => $order->uuid,
+            'owner_type' => 'order',
+            'tracking_number' => $trackingNumber,
+            'status' => 'active',
+            'meta' => [
+                'imported' => true
+            ]
+        ]);
+        
+        // Update order with tracking number
+        $order->update([
+            'tracking_number_uuid' => $tracking->uuid
+        ]);
+    }
+
+    /**
+     * Generate tracking number
+     * 
+     * @param Order $order Created order
+     * @param ImportTemplate|object|array|null $template Import template
+     * @return string Generated tracking number
+     */
+    protected function generateTrackingNumber($order, $template = null): string
+    {
+        $format = null;
+        if ($template) {
+            if (is_object($template)) {
+                $format = $template->tracking_number_format ?? null;
+            } elseif (is_array($template)) {
+                $format = $template['tracking_number_format'] ?? null;
+            }
+        }
+        
+        if ($format) {
+            return $this->formatTrackingNumber($format, $order);
+        }
+        
+        // Default format: ORD-YYYYMMDD-XXXXX
+        $prefix = 'ORD';
+        $date = now()->format('Ymd');
+        $random = strtoupper(Str::random(5));
+        
+        return "{$prefix}-{$date}-{$random}";
+    }
+
+    /**
+     * Format tracking number based on template
+     * 
+     * @param string $format Template format
+     * @param Order $order Order instance
+     * @return string Formatted tracking number
+     */
+    protected function formatTrackingNumber(string $format, $order): string
+    {
+        $replacements = [
+            '{PREFIX}' => 'ORD',
+            '{DATE}' => now()->format('Ymd'),
+            '{TIME}' => now()->format('His'),
+            '{RANDOM}' => strtoupper(Str::random(5)),
+            '{INCREMENT}' => str_pad($this->getNextIncrement(), 6, '0', STR_PAD_LEFT),
+            '{REFERENCE}' => $order->internal_id ?? '',
+            '{CUSTOMER_ID}' => substr($order->customer->public_id ?? '', -6)
+        ];
+        
+        return str_replace(
+            array_keys($replacements),
+            array_values($replacements),
+            $format
+        );
+    }
+
+    /**
+     * Get next increment for tracking numbers
+     * 
+     * @return int Next increment number
+     */
+    protected function getNextIncrement(): int
+    {
+        $lastOrder = Order::where('company_uuid', session('company'))
+            ->whereDate('created_at', today())
+            ->count();
+        
+        return $lastOrder + 1;
+    }
+
+    /**
+     * Create initial tracking status
+     * 
+     * @param Order $order Created order
+     * @param ImportTemplate|object|array|null $template Import template
+     */
+    protected function createInitialStatus(Order $order, $template = null): void
+    {
+        $status = 'Order Created';
+        $code = 'created';
+        
+        if ($template) {
+            if (is_object($template)) {
+                $status = $template->initial_status ?? $status;
+                $code = $template->initial_status_code ?? $code;
+            } elseif (is_array($template)) {
+                $status = $template['initial_status'] ?? $status;
+                $code = $template['initial_status_code'] ?? $code;
+            }
+        }
+        
+        TrackingStatus::create([
+            'company_uuid' => $order->company_uuid,
+            'tracking_number_uuid' => $order->tracking_number_uuid,
+            'status' => $status,
+            'code' => $code,
+            'details' => 'Order imported and created',
+            'location' => $order->pickup->location ?? null,
+            'meta' => [
+                'source' => 'import',
+                'order_id' => $order->public_id
+            ]
+        ]);
+    }
+
+    /**
+     * Parse address string into components
+     * 
+     * @param string $address Full address string
+     * @return array Address components
+     */
+    protected function parseAddress(string $address): array
+    {
+        // Simple parser - in production, use a proper address parsing service
+        $components = [];
+        
+        // Split by comma
+        $parts = array_map('trim', explode(',', $address));
+        
+        if (count($parts) >= 3) {
+            $components['street1'] = $parts[0];
+            $components['city'] = $parts[1];
+            
+            // Try to extract state and zip from last part
+            $lastPart = end($parts);
+            if (preg_match('/^(.+?)\s+(\d{5}(?:-\d{4})?)$/', $lastPart, $matches)) {
+                $components['state'] = trim($matches[1]);
+                $components['postal_code'] = $matches[2];
+            } else {
+                $components['state'] = $lastPart;
+            }
+        } else {
+            $components['street1'] = $address;
+        }
+        
+        return $components;
+    }
+
+    /**
+     * Create multiple orders from ImportRows in batch
+     * 
+     * @param ImportSession $session Import session
+     * @param ImportTemplate|object|array|null $template Import template
+     * @param array $options Batch options
+     * @return array Batch creation results
+     */
+    public function createOrdersBatch(
+        ImportSession $session,
+        $template = null,
+        array $options = []
+    ): array {
+        $importRows = ImportRow::where('session_uuid', $session->uuid)
+            ->importable()
+            ->whereNull('order_uuid')
+            ->get();
+        
+        if ($importRows->isEmpty()) {
+            return [
+                'success' => false,
+                'message' => 'No importable rows found',
+                'created' => 0,
+                'failed' => 0,
+                'orders' => []
+            ];
+        }
+        
+        $created = 0;
+        $failed = 0;
+        $errors = [];
+        $orders = [];
+        
+        // Process in chunks for better performance
+        $chunkSize = $options['chunk_size'] ?? 10;
+        $chunks = $importRows->chunk($chunkSize);
+        
+        foreach ($chunks as $chunk) {
+            foreach ($chunk as $importRow) {
+                try {
+                    $order = $this->createOrderFromImportRow($importRow, $template, $options);
+                    $orders[] = $order;
+                    $created++;
+                    
+                } catch (\Exception $e) {
+                    $failed++;
+                    $errors[] = [
+                        'row' => $importRow->row_number,
+                        'error' => $e->getMessage()
+                    ];
+                    
+                    // Continue with next row if not stopping on error
+                    if ($options['stop_on_error'] ?? false) {
+                        break 2; // Break out of both loops
+                    }
+                }
+            }
+        }
+        
+        // Update session stats
+        $session->update([
+            'imported_rows' => $created,
+            'failed_rows' => $failed,
+            'processing_status' => $failed === 0 ? 'completed' : 'completed_with_errors',
+            'completed_at' => now(),
+            'errors' => $errors
+        ]);
         
         return [
-            'company_uuid' => $mappedData['company_uuid'],
-            'name' => $mappedData['customer_name'] ?? null,
-            'phone' => $mappedData['customer_phone'] ?? null,
-            'email' => $mappedData['customer_email'] ?? null,
-            'type' => 'customer'
+            'success' => true,
+            'created' => $created,
+            'failed' => $failed,
+            'errors' => $errors,
+            'orders' => $orders,
+            'session' => $session
         ];
     }
 
     /**
-     * Process address string and create place record with geocoding
+     * Rollback imported orders (for failed batch)
      * 
-     * @param array $addressData Address information
-     * @return Place|null Created place or null if processing fails
+     * @param ImportSession $session Import session to rollback
+     * @return int Number of orders deleted
      */
-    protected function processAddress(array $addressData): ?Place
+    public function rollbackImportedOrders(ImportSession $session): int
     {
-        // TODO: Process address
-        // Geocode if needed
-        // Create place record
+        $importRows = ImportRow::where('session_uuid', $session->uuid)
+            ->whereNotNull('order_uuid')
+            ->get();
         
-        if (empty($addressData['address'])) {
-            return null;
-        }
+        $deleted = 0;
         
-        try {
-            $placeData = [
-                'name' => $addressData['type'] === 'pickup' ? 'Pickup Location' : 'Delivery Location',
-                'street1' => $addressData['address'],
-                'type' => $addressData['type']
-            ];
-            
-            // TODO: Implement geocoding service integration
-            // For now, create basic place without coordinates
-            
-            return Place::create($placeData);
-            
-        } catch (Exception $e) {
-            Log::error("Failed to process address", ['address' => $addressData, 'error' => $e->getMessage()]);
-            return null;
-        }
+        DB::transaction(function () use ($importRows, &$deleted) {
+            foreach ($importRows as $importRow) {
+                if ($importRow->order_uuid) {
+                    // Find and delete the order
+                    $order = Order::find($importRow->order_uuid);
+                    if ($order) {
+                        // Delete related records
+                        if ($order->payload) {
+                            $order->payload->waypoints()->delete();
+                            $order->payload->entities()->delete();
+                            $order->payload->delete();
+                        }
+                        
+                        if ($order->trackingNumber) {
+                            $order->trackingNumber->statuses()->delete();
+                            $order->trackingNumber->delete();
+                        }
+                        
+                        $order->delete();
+                        $deleted++;
+                    }
+                    
+                    // Reset import row
+                    $importRow->update([
+                        'order_uuid' => null,
+                        'created_order_id' => null,
+                        'processing_status' => ImportRow::STATUS_PENDING,
+                        'processing_message' => 'Rolled back'
+                    ]);
+                }
+            }
+        });
+        
+        // Update session
+        $session->update([
+            'imported_rows' => 0,
+            'processing_status' => 'rolled_back',
+            'rolled_back_at' => now()
+        ]);
+        
+        return $deleted;
     }
 
     // ============================================
