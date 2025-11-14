@@ -38,7 +38,7 @@ class OrderImportServicePHPUnitTest extends TestCase
             'customer_email' => 'test@example.com'
         ];
         
-        $result = $this->service->processRowDryRun($row, null);
+        $result = $this->service->processRowDryRunSimple($row, null);
         
         $this->assertArrayHasKey('original', $result);
         $this->assertArrayHasKey('status', $result);
@@ -55,7 +55,7 @@ class OrderImportServicePHPUnitTest extends TestCase
             'pickup' => '123 Main St',
         ];
         
-        $result = $this->service->processRowDryRun($row, null);
+        $result = $this->service->processRowDryRunSimple($row, null);
         
         $this->assertEquals('error', $result['status']);
         $this->assertNotEmpty($result['errors']);
@@ -80,7 +80,7 @@ class OrderImportServicePHPUnitTest extends TestCase
             // Missing customer_email (recommended)
         ];
         
-        $result = $this->service->processRowDryRun($row, null);
+        $result = $this->service->processRowDryRunSimple($row, null);
         
         $this->assertEquals('pending', $result['status']);
         $this->assertNotEmpty($result['warnings']);

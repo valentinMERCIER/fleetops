@@ -27,6 +27,7 @@ class ImportRow extends Model
      * @var array
      */
     protected $fillable = [
+        'company_uuid',
         'session_uuid',
         'row_number',
         'line_number',
@@ -34,12 +35,26 @@ class ImportRow extends Model
         'mapped_data',
         'normalized_data',
         'status',
+        'processing_status',
+        'processing_message',
+        'resolution_status',
+        'resolution_method',
+        'error_type',
+        'severity',
         'errors',
         'warnings',
         'error_severity',
+        'validation_errors',
+        'validation_warnings',
+        'suggestions',
         'order_uuid',
+        'created_order_id',
         'is_resolvable',
-        'suggested_fixes'
+        'is_duplicate',
+        'duplicate_order_id',
+        'processed_at',
+        'suggested_fixes',
+        'meta'
     ];
 
     /**
@@ -53,9 +68,45 @@ class ImportRow extends Model
         'normalized_data' => 'array',
         'errors' => 'array',
         'warnings' => 'array',
+        'validation_errors' => 'array',
+        'validation_warnings' => 'array',
+        'suggestions' => 'array',
         'suggested_fixes' => 'array',
-        'is_resolvable' => 'boolean'
+        'meta' => 'array',
+        'is_resolvable' => 'boolean',
+        'is_duplicate' => 'boolean',
+        'processed_at' => 'datetime'
     ];
+
+    /**
+     * Processing status constants
+     */
+    const STATUS_PENDING = 'pending';
+    const STATUS_PROCESSING = 'processing';
+    const STATUS_VALID = 'valid';
+    const STATUS_ERROR = 'error';
+    const STATUS_WARNING = 'warning';
+    const STATUS_DUPLICATE = 'duplicate';
+    const STATUS_SKIPPED = 'skipped';
+    const STATUS_IMPORTED = 'imported';
+    const STATUS_FAILED = 'failed';
+
+    /**
+     * Severity levels
+     */
+    const SEVERITY_INFO = 'info';
+    const SEVERITY_WARNING = 'warning';
+    const SEVERITY_ERROR = 'error';
+    const SEVERITY_CRITICAL = 'critical';
+
+    /**
+     * Resolution status
+     */
+    const RESOLUTION_PENDING = 'pending';
+    const RESOLUTION_AUTO_FIXED = 'auto_fixed';
+    const RESOLUTION_MANUAL_FIXED = 'manual_fixed';
+    const RESOLUTION_IGNORED = 'ignored';
+    const RESOLUTION_CANNOT_FIX = 'cannot_fix';
 
     /**
      * Get the import session that owns this row.
@@ -74,20 +125,57 @@ class ImportRow extends Model
     }
 
     /**
+     * Scopes for filtering rows by status
+     */
+    public function scopeValid($query)
+    {
+        return $query->where('processing_status', self::STATUS_VALID);
+    }
+
+    public function scopeWithErrors($query)
+    {
+        return $query->where('processing_status', self::STATUS_ERROR);
+    }
+
+    public function scopeWithWarnings($query)
+    {
+        return $query->where('processing_status', self::STATUS_WARNING);
+    }
+
+    public function scopeDuplicates($query)
+    {
+        return $query->where('processing_status', self::STATUS_DUPLICATE);
+    }
+
+    public function scopeResolvable($query)
+    {
+        return $query->where('is_resolvable', true);
+    }
+
+    public function scopeImportable($query)
+    {
+        return $query->whereIn('processing_status', [
+            self::STATUS_VALID,
+            self::STATUS_WARNING
+        ]);
+    }
+
+    public function scopeNeedsAttention($query)
+    {
+        return $query->where('processing_status', self::STATUS_ERROR)
+                    ->where('resolution_status', self::RESOLUTION_PENDING);
+    }
+
+    /**
      * Scope to get only problematic rows (with errors or warnings).
      */
     public function scopeProblematic($query)
     {
-        return $query->whereIn('status', ['mapping_failed', 'validation_failed', 'duplicate'])
-                    ->orWhereNotNull('warnings');
-    }
-
-    /**
-     * Scope to get only resolvable rows.
-     */
-    public function scopeResolvable($query)
-    {
-        return $query->where('is_resolvable', true);
+        return $query->whereIn('processing_status', [
+            self::STATUS_ERROR,
+            self::STATUS_FAILED,
+            self::STATUS_DUPLICATE
+        ])->orWhereNotNull('validation_warnings');
     }
 
     /**
@@ -99,45 +187,56 @@ class ImportRow extends Model
     }
 
     /**
-     * Check if this row has errors.
-     *
-     * @return bool
+     * Helper methods for dry run processing
      */
-    public function hasErrors()
+    public function canImport(): bool
     {
-        return !empty($this->errors);
+        return in_array($this->processing_status, [
+            self::STATUS_VALID,
+            self::STATUS_WARNING
+        ]);
     }
 
-    /**
-     * Check if this row has warnings.
-     *
-     * @return bool
-     */
-    public function hasWarnings()
+    public function hasErrors(): bool
     {
-        return !empty($this->warnings);
+        return !empty($this->validation_errors);
     }
 
-    /**
-     * Check if this row is problematic (has errors or warnings).
-     *
-     * @return bool
-     */
-    public function isProblematic()
+    public function hasWarnings(): bool
     {
-        return in_array($this->status, ['mapping_failed', 'validation_failed', 'duplicate']) 
-               || $this->hasWarnings();
+        return !empty($this->validation_warnings);
     }
 
-    /**
-     * Check if this row can be retried.
-     *
-     * @return bool
-     */
-    public function canRetry()
+    public function isResolved(): bool
     {
-        return in_array($this->status, ['validation_failed', 'mapping_failed', 'failed']) 
-               && $this->is_resolvable;
+        return in_array($this->resolution_status, [
+            self::RESOLUTION_AUTO_FIXED,
+            self::RESOLUTION_MANUAL_FIXED,
+            self::RESOLUTION_IGNORED
+        ]);
+    }
+
+    public function needsAttention(): bool
+    {
+        return $this->processing_status === self::STATUS_ERROR && 
+               $this->resolution_status === self::RESOLUTION_PENDING;
+    }
+
+    public function isProblematic(): bool
+    {
+        return in_array($this->processing_status, [
+            self::STATUS_ERROR,
+            self::STATUS_FAILED,
+            self::STATUS_DUPLICATE
+        ]) || $this->hasWarnings();
+    }
+
+    public function canRetry(): bool
+    {
+        return in_array($this->processing_status, [
+            self::STATUS_ERROR,
+            self::STATUS_FAILED
+        ]) && $this->is_resolvable;
     }
 
     /**
