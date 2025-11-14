@@ -505,6 +505,47 @@ Route::prefix(config('fleetops.api.routing.prefix', null))->namespace('Fleetbase
                                         $router->post('routing-settings', 'SettingController@saveRoutingSettings');
                                     }
                                 );
+                                
+                                // Order Import Routes
+                                $router->group(
+                                    ['prefix' => 'imports'],
+                                    function ($router) {
+                                        // File operations
+                                        $router->post('upload', 'OrderImportController@upload');
+                                        $router->post('detect-mappings', 'OrderImportController@detectMappings');
+                                        
+                                        // Dry run operations
+                                        $router->post('dry-run', 'OrderImportController@dryRun');
+                                        $router->get('dry-run/{sessionId}', 'OrderImportController@getDryRunResults');
+                                        
+                                        // Import execution
+                                        $router->post('execute', 'OrderImportController@execute');
+                                        
+                                        // Session management
+                                        $router->get('sessions', 'OrderImportController@index');
+                                        $router->get('sessions/{id}', 'OrderImportController@show');
+                                        $router->get('sessions/{id}/status', 'OrderImportController@status');
+                                        $router->delete('sessions/{id}', 'OrderImportController@cancel');
+                                        
+                                        // Row operations
+                                        $router->post('rows/{id}/fix', 'OrderImportController@fixRow');
+                                    }
+                                );
+                                
+                                // Import Template Routes
+                                $router->group(
+                                    ['prefix' => 'import-templates'],
+                                    function ($router) {
+                                        $router->get('/', 'ImportTemplateController@index');
+                                        $router->post('/', 'ImportTemplateController@store');
+                                        $router->get('{id}', 'ImportTemplateController@show');
+                                        $router->put('{id}', 'ImportTemplateController@update');
+                                        $router->delete('{id}', 'ImportTemplateController@destroy');
+                                        $router->post('{id}/clone', 'ImportTemplateController@clone');
+                                        $router->post('{id}/test', 'ImportTemplateController@testTemplate');
+                                    }
+                                );
+                                
                                 $router->group(
                                     ['prefix' => 'metrics'],
                                     function ($router) {
