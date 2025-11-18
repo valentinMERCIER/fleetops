@@ -45,7 +45,20 @@ class ImportSession extends Model
         'errors',
         'meta',
         'started_at',
-        'completed_at'
+        'completed_at',
+        // Additional columns for import workflow
+        'file_path',
+        'file_name',
+        'file_type',
+        'field_mappings',
+        'parsed_at',
+        'dry_run_completed_at',
+        'import_started_at',
+        'cancelled_at',
+        'imported_rows',
+        'valid_rows',
+        'warning_rows',
+        'duplicate_rows'
     ];
 
     /**
@@ -65,7 +78,17 @@ class ImportSession extends Model
         'errors' => 'array',
         'meta' => 'array',
         'started_at' => 'datetime',
-        'completed_at' => 'datetime'
+        'completed_at' => 'datetime',
+        // Additional column casts
+        'field_mappings' => 'array',
+        'parsed_at' => 'datetime',
+        'dry_run_completed_at' => 'datetime',
+        'import_started_at' => 'datetime',
+        'cancelled_at' => 'datetime',
+        'imported_rows' => 'integer',
+        'valid_rows' => 'integer',
+        'warning_rows' => 'integer',
+        'duplicate_rows' => 'integer'
     ];
 
     /**
