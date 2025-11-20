@@ -141,7 +141,6 @@ class OrderImportApiTest extends TestCase
         
         // Test dry run request
         $requestData = [
-            'session_id' => $sessionData['public_id'],
             'mappings' => [
                 'customer_name' => 'Name',
                 'customer_phone' => 'Phone',
@@ -152,7 +151,6 @@ class OrderImportApiTest extends TestCase
             'stop_on_error' => false
         ];
         
-        $this->assertArrayHasKey('session_id', $requestData);
         $this->assertArrayHasKey('mappings', $requestData);
         $this->assertIsArray($requestData['mappings']);
         
@@ -187,13 +185,11 @@ class OrderImportApiTest extends TestCase
     {
         // Test execution request
         $requestData = [
-            'session_id' => 'test-session-123',
             'stop_on_error' => false,
             'include_orders' => false,
             'chunk_size' => 10
         ];
         
-        $this->assertArrayHasKey('session_id', $requestData);
         $this->assertIsBool($requestData['stop_on_error']);
         $this->assertIsBool($requestData['include_orders']);
         $this->assertIsInt($requestData['chunk_size']);
@@ -418,22 +414,18 @@ class OrderImportApiTest extends TestCase
         
         // Test dry run validation
         $dryRunRules = [
-            'session_id' => 'required|string',
             'mappings' => 'required_without:template_id|array',
             'duplicate_handling' => 'nullable|in:allow,warn,reject'
         ];
         
-        $this->assertArrayHasKey('session_id', $dryRunRules);
-        $this->assertStringContainsString('required', $dryRunRules['session_id']);
+        $this->assertArrayHasKey('mappings', $dryRunRules);
         
         // Test execute validation
         $executeRules = [
-            'session_id' => 'required|string',
             'stop_on_error' => 'nullable|boolean',
             'chunk_size' => 'nullable|integer|min:1|max:100'
         ];
         
-        $this->assertArrayHasKey('session_id', $executeRules);
         $this->assertStringContainsString('max:100', $executeRules['chunk_size']);
         
         // Test fix row validation

@@ -18,12 +18,28 @@ class OrderImportExecuteRequest extends FormRequest
     }
 
     /**
+     * Prepare the data for validation
+     * Convert string 'true'/'false' from form-data to actual booleans
+     */
+    protected function prepareForValidation(): void
+    {
+        $booleanFields = ['stop_on_error', 'include_orders', 'notify_on_completion'];
+        
+        foreach ($booleanFields as $field) {
+            if ($this->has($field) && is_string($this->input($field))) {
+                $this->merge([
+                    $field => filter_var($this->input($field), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)
+                ]);
+            }
+        }
+    }
+
+    /**
      * Get the validation rules that apply to the request
      */
     public function rules(): array
     {
         return [
-            'session_id' => 'required|string',
             'stop_on_error' => 'nullable|boolean',
             'include_orders' => 'nullable|boolean',
             'notify_on_completion' => 'nullable|boolean',

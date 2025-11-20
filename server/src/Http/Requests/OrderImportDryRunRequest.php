@@ -18,12 +18,28 @@ class OrderImportDryRunRequest extends FormRequest
     }
 
     /**
+     * Prepare the data for validation
+     * Convert string 'true'/'false' from form-data to actual booleans
+     */
+    protected function prepareForValidation(): void
+    {
+        $booleanFields = ['stop_on_error'];
+        
+        foreach ($booleanFields as $field) {
+            if ($this->has($field) && is_string($this->input($field))) {
+                $this->merge([
+                    $field => filter_var($this->input($field), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)
+                ]);
+            }
+        }
+    }
+
+    /**
      * Get the validation rules that apply to the request
      */
     public function rules(): array
     {
         return [
-            'session_id' => 'required|string',
             'template_id' => 'nullable|string',
             'mappings' => 'required_without:template_id|array',
             'mappings.*' => 'string', // Each mapping should be a string

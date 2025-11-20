@@ -18,6 +18,29 @@ class OrderImportUploadRequest extends FormRequest
     }
 
     /**
+     * Prepare the data for validation
+     * Convert string 'true'/'false' from form-data to actual booleans
+     */
+    /**
+     * Prepare the data for validation
+     * Convert string 'true'/'false' from form-data to actual booleans
+     */
+    protected function prepareForValidation(): void
+    {
+        // Convert string boolean values to actual booleans for form-data requests
+        if ($this->has('auto_detect_mappings')) {
+            $value = $this->input('auto_detect_mappings');
+            
+            // Convert string 'true'/'false' or '1'/'0' to boolean
+            if (is_string($value)) {
+                $this->merge([
+                    'auto_detect_mappings' => filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE)
+                ]);
+            }
+        }
+    }
+
+    /**
      * Get the validation rules that apply to the request
      */
     public function rules(): array
@@ -29,6 +52,7 @@ class OrderImportUploadRequest extends FormRequest
                 'mimes:csv,xlsx,xls,json',
                 'max:10240' // 10MB max
             ],
+            'name' => 'nullable|string|max:255',
             'template_id' => 'nullable|string',
             'auto_detect_mappings' => 'nullable|boolean'
         ];

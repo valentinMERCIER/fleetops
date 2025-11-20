@@ -18,13 +18,14 @@ use Fleetbase\Models\File;
 use Illuminate\Http\UploadedFile;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Shared\Date;
-use League\Csv\Reader;
-use League\Csv\Statement;
+use Maatwebsite\Excel\Facades\Excel;
+use Fleetbase\FleetOps\Imports\CsvOrderImport;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use Fleetbase\LaravelMysqlSpatial\Types\Point;
 use Exception;
 
 /**
@@ -142,7 +143,7 @@ class OrderImportService
         // Required customer information
         'customer_name' => 'required|string|min:2|max:255',
         'customer_phone' => 'required_without:customer_email|nullable|regex:/^\+?[0-9]{10,15}$/',
-        'customer_email' => 'required_without:customer_phone|nullable|email:rfc,dns',
+        'customer_email' => 'required_without:customer_phone|nullable|email',
         
         // Required address information
         'pickup_address' => 'required|string|min:10|max:500',
@@ -251,49 +252,97 @@ class OrderImportService
     protected function parseCsv(UploadedFile $file): array
     {
         try {
-            // Create CSV reader from uploaded file
-            $csv = Reader::createFromPath($file->getPathname(), 'r');
-            
-            // Detect and set delimiter
-            $delimiters = [',', ';', "\t", '|'];
-            $delimiter = $this->detectCsvDelimiter($file->getPathname(), $delimiters);
-            $csv->setDelimiter($delimiter);
-            
-            // Detect encoding and handle if needed
+            // Detect and handle encoding
             $fileContent = file_get_contents($file->getPathname());
             $encoding = mb_detect_encoding($fileContent, ['UTF-8', 'ISO-8859-1', 'Windows-1252'], true);
+            
+            $tempFile = null;
+            $filePath = $file->getPathname();
             
             // Convert to UTF-8 if necessary
             if ($encoding && $encoding !== 'UTF-8') {
                 $convertedContent = mb_convert_encoding($fileContent, 'UTF-8', $encoding);
                 $tempFile = tempnam(sys_get_temp_dir(), 'csv_import_');
                 file_put_contents($tempFile, $convertedContent);
-                $csv = Reader::createFromPath($tempFile, 'r');
-                $csv->setDelimiter($delimiter);
+                $filePath = $tempFile;
             }
             
-            // Set header offset (assume first row is header)
-            $csv->setHeaderOffset(0);
-            
-            // Get headers
-            $headers = $csv->getHeader();
-            
-            // Clean up headers
-            $headers = array_map('trim', $headers);
+            // Detect delimiter
+            $delimiters = [',', ';', "\t", '|'];
+            $delimiter = $this->detectCsvDelimiter($filePath, $delimiters);
             
             // Check if file is empty
-            $content = file_get_contents($file->getPathname());
-            if (empty(trim($content))) {
+            if (empty(trim($fileContent))) {
                 throw new \RuntimeException("CSV file is empty");
             }
             
-            // Get records with row processing
+            // Create import instance with detected delimiter
+            $import = new CsvOrderImport($delimiter, $encoding ?: 'UTF-8');
+            
+            // Configure CSV settings dynamically for this import
+            config(['excel.imports.csv.delimiter' => $delimiter]);
+            config(['excel.imports.csv.enclosure' => '"']);
+            config(['excel.imports.csv.escape_character' => '\\']);
+            
+            // Use Excel library to parse CSV with proper delimiter handling
+            $data = Excel::toArray($import, $filePath, null, \Maatwebsite\Excel\Excel::CSV);
+            
+            // Clean up temporary file if created
+            if ($tempFile && file_exists($tempFile)) {
+                unlink($tempFile);
+            }
+            
+            if (empty($data) || empty($data[0])) {
+                throw new \RuntimeException("CSV file appears to be empty or invalid");
+            }
+            
+            // Extract data from first sheet
+            $sheetData = $data[0];
+            
+            if (empty($sheetData)) {
+                throw new \RuntimeException("No data found in CSV file");
+            }
+            
+            // First row contains headers
+            $headers = array_shift($sheetData);
+            $headers = array_map(function($header) {
+                return trim(strval($header));
+            }, $headers);
+            
+            // Filter out empty headers
+            $headers = array_filter($headers, function($header) {
+                return !empty($header);
+            });
+            
+            if (empty($headers)) {
+                throw new \RuntimeException("No valid headers found in CSV file");
+            }
+            
+            // Process data rows
             $records = [];
             $rowCount = 0;
             
-            foreach ($csv->getRecords() as $offset => $record) {
+            foreach ($sheetData as $row) {
+                // Skip empty rows
+                $filteredRow = array_filter($row, function($cell) {
+                    return $cell !== null && trim(strval($cell)) !== '';
+                });
+                
+                if (empty($filteredRow)) {
+                    continue;
+                }
+                
+                // Ensure row has same number of columns as headers
+                $row = array_pad($row, count($headers), '');
+                $row = array_slice($row, 0, count($headers));
+                
+                // Combine with headers to create associative array
+                $record = array_combine($headers, $row);
+                
                 // Clean up the record data
-                $cleanRecord = array_map('trim', $record);
+                $cleanRecord = array_map(function($value) {
+                    return trim(strval($value));
+                }, $record);
                 
                 $records[] = $cleanRecord;
                 $rowCount++;
@@ -306,11 +355,6 @@ class OrderImportService
                     ]);
                     break;
                 }
-            }
-            
-            // Clean up temporary file if created
-            if (isset($tempFile) && file_exists($tempFile)) {
-                unlink($tempFile);
             }
             
             Log::info("CSV parsed successfully", [
@@ -1353,7 +1397,8 @@ class OrderImportService
             'session_uuid' => $session->uuid,
             'row_number' => $rowNumber
         ], [
-            'company_uuid' => $session->company_uuid ?? session('company')
+            'company_uuid' => $session->company_uuid ?? session('company'),
+            'original_data' => $row
         ]);
         
         // Store original data
@@ -1544,7 +1589,7 @@ class OrderImportService
                 'warning_rows' => $stats['warnings'],
                 'duplicate_rows' => $stats['duplicates'],
                 'importable_rows' => $stats['importable'],
-                'processing_status' => $this->determineSessionStatus($stats),
+                'status' => $this->determineSessionStatus($stats),
                 'dry_run_completed_at' => now()
             ]);
             
@@ -2343,9 +2388,6 @@ class OrderImportService
             // Step 7: Set tracking number
             $this->setupTracking($order, $template);
             
-            // Step 8: Create initial tracking status
-            $this->createInitialStatus($order, $template);
-            
             // Step 9: Update ImportRow with success
             $importRow->update([
                 'order_uuid' => $order->uuid,
@@ -2520,7 +2562,8 @@ class OrderImportService
             'meta' => [
                 'source' => 'import',
                 'original_address' => $address
-            ]
+            ],
+            'location' => DB::raw('POINT(0, 0)')
         ];
         
         return Place::create($placeData);
@@ -2556,8 +2599,6 @@ class OrderImportService
             'company_uuid' => $companyId,
             'customer_uuid' => $customer->uuid,
             'customer_type' => 'contact',
-            'pickup_uuid' => $pickup->uuid,
-            'dropoff_uuid' => $dropoff->uuid,
             'adhoc' => true,
             'status' => 'created',
             'type' => 'delivery',
@@ -2612,7 +2653,7 @@ class OrderImportService
         $pickup,
         $dropoff,
         $template = null
-    ): array {
+    ): Payload {
         $payloadData = [
             'company_uuid' => $order->company_uuid,
             'pickup_uuid' => $pickup->uuid,
@@ -2738,7 +2779,7 @@ class OrderImportService
         $tracking = TrackingNumber::create([
             'company_uuid' => $order->company_uuid,
             'owner_uuid' => $order->uuid,
-            'owner_type' => 'order',
+            'owner_type' => $order->getMorphClass(),
             'tracking_number' => $trackingNumber,
             'status' => 'active',
             'meta' => [

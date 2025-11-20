@@ -316,6 +316,26 @@ Route::prefix(config('fleetops.api.routing.prefix', null))->namespace('Fleetbase
                                 $router->delete('bulk-delete', $controller('bulkDelete'));
                             }
                         );
+                        
+                        // Order Import Routes - MUST be before fleetbaseRoutes('orders') for route precedence
+                        $router->group(['prefix' => 'orders/import-sessions'], function ($router) {
+                            // Session management
+                            $router->post('/', 'OrderImportController@upload');
+                            $router->get('/', 'OrderImportController@index');
+                            $router->get('{id}', 'OrderImportController@show');
+                            $router->delete('{id}', 'OrderImportController@cancel');
+                            
+                            // Session actions
+                            $router->get('{id}/status', 'OrderImportController@status');
+                            $router->post('{id}/detect-mappings', 'OrderImportController@detectMappings');
+                            $router->post('{id}/dry-run', 'OrderImportController@dryRun');
+                            $router->get('{id}/dry-run', 'OrderImportController@getDryRunResults');
+                            $router->post('{id}/execute', 'OrderImportController@execute');
+                            
+                            // Row operations
+                            $router->post('{id}/rows/{rowId}/fix', 'OrderImportController@fixRow');
+                        });
+                        
                         $router->fleetbaseRoutes(
                             'orders',
                             function ($router, $controller) {
@@ -341,6 +361,7 @@ Route::prefix(config('fleetops.api.routing.prefix', null))->namespace('Fleetbase
                                 $router->match(['get', 'post'], 'export', $controller('export'));
                             }
                         );
+                        
                         $router->fleetbaseRoutes('order-configs');
                         $router->fleetbaseRoutes('payloads');
                         $router->fleetbaseRoutes(
@@ -398,6 +419,7 @@ Route::prefix(config('fleetops.api.routing.prefix', null))->namespace('Fleetbase
                                 $router->delete('bulk-delete', $controller('bulkDelete'));
                             }
                         );
+                        
                         $router->fleetbaseRoutes('vehicle-devices');
                         $router->fleetbaseRoutes(
                             'vendors',
@@ -503,32 +525,6 @@ Route::prefix(config('fleetops.api.routing.prefix', null))->namespace('Fleetbase
                                         $router->post('notification-settings', 'SettingController@saveNotificationSettings');
                                         $router->get('routing-settings', 'SettingController@getRoutingSettings');
                                         $router->post('routing-settings', 'SettingController@saveRoutingSettings');
-                                    }
-                                );
-                                
-                                // Order Import Routes
-                                $router->group(
-                                    ['prefix' => 'imports'],
-                                    function ($router) {
-                                        // File operations
-                                        $router->post('upload', 'OrderImportController@upload');
-                                        $router->post('detect-mappings', 'OrderImportController@detectMappings');
-                                        
-                                        // Dry run operations
-                                        $router->post('dry-run', 'OrderImportController@dryRun');
-                                        $router->get('dry-run/{sessionId}', 'OrderImportController@getDryRunResults');
-                                        
-                                        // Import execution
-                                        $router->post('execute', 'OrderImportController@execute');
-                                        
-                                        // Session management
-                                        $router->get('sessions', 'OrderImportController@index');
-                                        $router->get('sessions/{id}', 'OrderImportController@show');
-                                        $router->get('sessions/{id}/status', 'OrderImportController@status');
-                                        $router->delete('sessions/{id}', 'OrderImportController@cancel');
-                                        
-                                        // Row operations
-                                        $router->post('rows/{id}/fix', 'OrderImportController@fixRow');
                                     }
                                 );
                                 

@@ -1,6 +1,6 @@
 <?php
 
-namespace Fleetbase\FleetOps\Http\Controllers\Api\v1;
+namespace Fleetbase\FleetOps\Http\Controllers\Internal\v1;
 
 use Fleetbase\FleetOps\Http\Controllers\FleetOpsController;
 use Fleetbase\FleetOps\Services\OrderImportService;
@@ -13,6 +13,9 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Fleetbase\FleetOps\Http\Requests\OrderImportUploadRequest;
+use Fleetbase\FleetOps\Http\Requests\OrderImportDryRunRequest;
+use Fleetbase\FleetOps\Http\Requests\OrderImportExecuteRequest;
 
 /**
  * API Controller for Order Import System
@@ -35,57 +38,62 @@ class OrderImportController extends Controller
         
         // Apply middleware for authentication and permissions
         $this->middleware('fleetbase.protected');
-        $this->middleware('permission:fleet-ops.import.create')->only(['upload', 'dryRun', 'execute']);
-        $this->middleware('permission:fleet-ops.import.view')->only(['index', 'show', 'getDryRunResults', 'status']);
-        $this->middleware('permission:fleet-ops.import.update')->only(['fixRow']);
-        $this->middleware('permission:fleet-ops.import.delete')->only(['cancel', 'rollback']);
     }
     
     /**
      * Upload and parse import file
      * 
-     * @param Request $request
+     * @param OrderImportUploadRequest $request
      * @return JsonResponse
      */
-    public function upload(Request $request): JsonResponse
+    public function upload(OrderImportUploadRequest $request): JsonResponse
     {
-        // Validate request
-        $request->validate([
-            'file' => [
-                'required',
-                'file',
-                'mimes:csv,xlsx,xls,json',
-                'max:10240' // 10MB max
-            ],
-            'template_id' => 'nullable|string',
-            'auto_detect_mappings' => 'nullable|boolean'
-        ], [
-            'file.required' => 'Please upload a file',
-            'file.mimes' => 'File must be CSV, Excel, or JSON format',
-            'file.max' => 'File size must not exceed 10MB'
-        ]);
+        // Validation handled by FormRequest
         
         try {
             $file = $request->file('file');
             $templateId = $request->input('template_id');
             $autoDetect = $request->boolean('auto_detect_mappings', true);
             
-            // Create import session
-            $session = ImportSession::create([
-                'company_uuid' => session('company'),
-                'import_template_uuid' => $templateId,
+            // Auto-generate name if not provided
+            $name = $request->input('name');
+            if (empty($name)) {
+                $filename = pathinfo($file->getClientOriginalName(), PATHINFO_FILENAME);
+                $name = 'Import: ' . $filename . ' - ' . now()->format('Y-m-d H:i');
+            }
+            
+            // Create import session in two steps
+            $session = new ImportSession();
+            $session->company_uuid = session('company');
+            $session->status = 'uploading';
+            $session->save();
+            
+            // Update with additional fields after creation
+            $session->update([
+                'name' => $name,
+                'template_uuid' => $templateId,
                 'file_name' => $file->getClientOriginalName(),
-                'file_type' => $file->getClientOriginalExtension(),
-                'file_size' => $file->getSize(),
-                'status' => 'uploading',
-                'created_by_uuid' => $request->user()->uuid ?? null
+                'file_type' => $file->getClientMimeType()
             ]);
             
-            // Store file securely
+            // Store file securely and create File record
             $path = $file->store('imports/' . $session->public_id, 'local');
+            
+            // Create File record
+            $fileRecord = \Fleetbase\Models\File::create([
+                'company_uuid' => session('company'),
+                'name' => $file->getClientOriginalName(),
+                'original_filename' => $file->getClientOriginalName(),
+                'path' => $path,
+                'disk' => 'local',
+                'type' => $file->getClientMimeType(),
+                'size' => $file->getSize(),
+            ]);
+            
             $session->update([
+                'file_uuid' => $fileRecord->uuid,
                 'file_path' => $path,
-                'status' => 'parsing'
+                'status' => 'validating'
             ]);
             
             // Parse file
@@ -94,10 +102,14 @@ class OrderImportController extends Controller
             // Store parsed data and update session
             $session->update([
                 'total_rows' => $parsed['total'],
-                'headers' => $parsed['headers'],
-                'preview_data' => array_slice($parsed['rows'], 0, 10), // Store first 10 rows as preview
-                'status' => 'parsed',
-                'parsed_at' => now()
+                'meta' => [
+                    'headers' => $parsed['headers'],
+                    'preview_data' => array_slice($parsed['rows'], 0, 10), // Store first 10 rows as preview
+                    'delimiter' => $parsed['delimiter'] ?? null,
+                    'encoding' => $parsed['encoding'] ?? null
+                ],
+                'parsed_at' => now(),
+                'status' => 'ready'
             ]);
             
             // Auto-detect mappings if requested
@@ -117,8 +129,8 @@ class OrderImportController extends Controller
                 'data' => [
                     'session' => [
                         'id' => $session->public_id,
-                        'file_name' => $session->file_name,
-                        'file_type' => $session->file_type,
+                        'name' => $session->name,
+                        'file_name' => $fileRecord->name,
                         'status' => $session->status
                     ],
                     'parsed' => [
@@ -136,7 +148,13 @@ class OrderImportController extends Controller
         } catch (\Exception $e) {
             // Clean up on failure
             if (isset($session)) {
-                $session->update(['status' => 'failed', 'error_message' => $e->getMessage()]);
+                $session->update([
+                    'status' => 'failed', 
+                    'errors' => [
+                        'upload_error' => $e->getMessage(),
+                        'timestamp' => now()->toISOString()
+                    ]
+                ]);
             }
             
             return response()->json([
@@ -153,18 +171,33 @@ class OrderImportController extends Controller
      * @param Request $request
      * @return JsonResponse
      */
-    public function detectMappings(Request $request): JsonResponse
+    /**
+     * Auto-detect field mappings from headers
+     * 
+     * @param Request $request
+     * @param string $id
+     * @return JsonResponse
+     */
+    public function detectMappings(Request $request, string $id): JsonResponse
     {
-        $request->validate([
-            'headers' => 'required|array',
-            'sample_data' => 'array'
-        ]);
+        $session = ImportSession::where('public_id', $id)
+            ->where('company_uuid', session('company'))
+            ->firstOrFail();
+            
+        $headers = $session->meta['headers'] ?? [];
         
-        $headers = $request->input('headers');
-        $sampleData = $request->input('sample_data', []);
+        if (empty($headers)) {
+             return response()->json([
+                'success' => false,
+                'message' => 'No headers found in session'
+            ], 422);
+        }
         
         // Detect mappings
         $detected = $this->importService->detectFieldMappings($headers);
+        
+        // Get sample data from session preview if available
+        $sampleData = $session->meta['preview_data'] ?? [];
         
         // Validate sample data if provided
         $validation = null;
@@ -196,19 +229,18 @@ class OrderImportController extends Controller
      * @param Request $request
      * @return JsonResponse
      */
-    public function dryRun(Request $request): JsonResponse
+    /**
+     * Execute dry run to preview import results
+     * 
+     * @param OrderImportDryRunRequest $request
+     * @param string $id
+     * @return JsonResponse
+     */
+    public function dryRun(OrderImportDryRunRequest $request, string $id): JsonResponse
     {
-        $request->validate([
-            'session_id' => 'required|string',
-            'template_id' => 'nullable|string',
-            'mappings' => 'required_without:template_id|array',
-            'validation_rules' => 'nullable|array',
-            'default_values' => 'nullable|array',
-            'duplicate_handling' => 'nullable|in:allow,warn,reject',
-            'stop_on_error' => 'nullable|boolean'
-        ]);
+        // Validation handled by FormRequest
         
-        $session = ImportSession::where('public_id', $request->input('session_id'))
+        $session = ImportSession::where('public_id', $id)
             ->where('company_uuid', session('company'))
             ->firstOrFail();
         
@@ -259,7 +291,13 @@ class OrderImportController extends Controller
             ]);
             
         } catch (\Exception $e) {
-            $session->update(['status' => 'failed', 'error_message' => $e->getMessage()]);
+            $session->update([
+                'status' => 'failed', 
+                'errors' => [
+                    'processing_error' => $e->getMessage(),
+                    'timestamp' => now()->toISOString()
+                ]
+            ]);
             
             return response()->json([
                 'success' => false,
@@ -318,20 +356,23 @@ class OrderImportController extends Controller
      * @param Request $request
      * @return JsonResponse
      */
-    public function execute(Request $request): JsonResponse
+    /**
+     * Execute the actual import
+     * 
+     * @param OrderImportExecuteRequest $request
+     * @param string $id
+     * @return JsonResponse
+     */
+    public function execute(OrderImportExecuteRequest $request, string $id): JsonResponse
     {
-        $request->validate([
-            'session_id' => 'required|string',
-            'stop_on_error' => 'nullable|boolean',
-            'include_orders' => 'nullable|boolean'
-        ]);
+        // Validation handled by FormRequest
         
-        $session = ImportSession::where('public_id', $request->input('session_id'))
+        $session = ImportSession::where('public_id', $id)
             ->where('company_uuid', session('company'))
             ->firstOrFail();
         
         // Verify session is ready for import
-        if (!in_array($session->status, ['ready', 'dry_run_completed', 'processed'])) {
+        if (!in_array($session->status, ['ready', 'dry_run_completed', 'processed', 'has_warnings'])) {
             return response()->json([
                 'success' => false,
                 'message' => 'Session is not ready for import. Please run dry-run first.'
@@ -382,7 +423,13 @@ class OrderImportController extends Controller
             ]);
             
         } catch (\Exception $e) {
-            $session->update(['status' => 'failed', 'error_message' => $e->getMessage()]);
+            $session->update([
+                'status' => 'failed', 
+                'errors' => [
+                    'processing_error' => $e->getMessage(),
+                    'timestamp' => now()->toISOString()
+                ]
+            ]);
             
             return response()->json([
                 'success' => false,
@@ -400,6 +447,14 @@ class OrderImportController extends Controller
      */
     public function index(Request $request): JsonResponse
     {
+        // Debug logging
+        \Log::info('OrderImportController@index called', [
+            'user' => auth()->user() ? auth()->user()->email : 'not authenticated',
+            'company' => session('company'),
+            'request_path' => $request->path(),
+            'request_method' => $request->method()
+        ]);
+        
         $query = ImportSession::where('company_uuid', session('company'));
         
         // Apply filters
@@ -504,7 +559,15 @@ class OrderImportController extends Controller
      * @param string $id
      * @return JsonResponse
      */
-    public function fixRow(Request $request, $id): JsonResponse
+    /**
+     * Fix and revalidate an import row
+     * 
+     * @param Request $request
+     * @param string $id
+     * @param string $rowId
+     * @return JsonResponse
+     */
+    public function fixRow(Request $request, string $id, string $rowId): JsonResponse
     {
         $request->validate([
             'corrections' => 'required|array',
@@ -517,9 +580,10 @@ class OrderImportController extends Controller
             'corrections.notes' => 'sometimes|string|max:1000'
         ]);
         
-        $importRow = ImportRow::where('id', $id)
-            ->whereHas('session', function($query) {
-                $query->where('company_uuid', session('company'));
+        $importRow = ImportRow::where('id', $rowId)
+            ->whereHas('session', function($query) use ($id) {
+                $query->where('public_id', $id)
+                      ->where('company_uuid', session('company'));
             })
             ->firstOrFail();
         
