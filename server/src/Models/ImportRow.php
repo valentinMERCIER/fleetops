@@ -6,13 +6,14 @@ use Fleetbase\Models\Model;
 use Fleetbase\Traits\HasUuid;
 use Fleetbase\Traits\HasPublicId;
 use Fleetbase\Traits\HasApiModelBehavior;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
 /**
  * Model for tracking individual rows in import sessions.
  */
 class ImportRow extends Model
 {
-    use HasUuid, HasPublicId, HasApiModelBehavior;
+    use HasUuid, HasPublicId, HasApiModelBehavior, SoftDeletes;
 
     /**
      * The database table used by the model.
