@@ -83,6 +83,12 @@ export default class OperationsOrdersIndexController extends Controller {
                 onClick: this.orderActions.transition.create,
             },
             {
+                text: this.intl.t('common.import'),
+                type: 'magic',
+                icon: 'file-import',
+                onClick: this.orderActions.transition.import,
+            },
+            {
                 text: this.intl.t('common.export'),
                 icon: 'long-arrow-up',
                 iconClass: 'rotate-icon-45',

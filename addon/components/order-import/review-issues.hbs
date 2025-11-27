@@ -1,0 +1,48 @@
+<div class="bg-white rounded-lg shadow-2xl w-full max-w-3xl mx-auto">
+    <div class="flex items-center justify-between p-6 border-b border-gray-200">
+        <h2 class="text-xl font-semibold text-gray-900">Review Issues</h2>
+        <button type="button" class="close text-2xl focus:outline-none" aria-label="Close" {{on "click" @onCancel}}>
+            <span aria-hidden="true">&times;</span>
+        </button>
+    </div>
+
+    <div class="p-6">
+        <div class="mb-6 text-sm text-gray-600">
+            Issues were discovered during import. Click <span class="font-medium">Continue</span> to import without
+            editing.
+            To correct issues and try import again, click <span class="font-medium">Cancel import</span> and exit.
+        </div>
+
+        <div class="mb-6">
+            <h3 class="text-red-600 font-semibold mb-4">2 tasks will not be imported</h3>
+
+            <div class="bg-white border border-gray-200 rounded-lg p-4 space-y-4">
+                <div>
+                    <div class="font-medium text-gray-900 mb-1">Row 2, Column <span
+                            class="font-mono">completeBefore</span></div>
+                    <div class="text-sm text-gray-600">Invalid date range - completeBefore or completeAfter is in the
+                        past</div>
+                </div>
+
+                <div class="border-t border-gray-200 pt-4">
+                    <div class="font-medium text-gray-900 mb-1">Row 3, Column <span
+                            class="font-mono">completeBefore</span></div>
+                    <div class="text-sm text-gray-600">Invalid date range - completeBefore or completeAfter is in the
+                        past</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="flex items-center justify-between px-6 py-4 border-t border-gray-200 bg-gray-50">
+        <button type="button"
+            class="px-4 py-2 text-gray-700 border border-gray-300 rounded-lg hover:bg-gray-100 font-medium" {{on "click"
+            @onCancel}}>
+            Cancel Import
+        </button>
+        <button type="button" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
+            {{on "click" @onContinue}}>
+            Continue
+        </button>
+    </div>
+</div>

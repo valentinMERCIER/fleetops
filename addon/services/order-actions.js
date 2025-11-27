@@ -6,6 +6,7 @@ import { task } from 'ember-concurrency';
 
 export default class OrderActionsService extends ResourceActionService {
     @service store;
+    @service orderImport;
     modelNamePath = 'tracking';
 
     constructor() {
@@ -22,6 +23,7 @@ export default class OrderActionsService extends ResourceActionService {
         view: (order) => this.transitionTo('operations.orders.index.details', order),
         edit: (order) => this.transitionTo('operations.orders.index.edit', order),
         create: () => this.transitionTo('operations.orders.index.new'),
+        import: () => this.orderImport.promptBulkImport({ onSuccess: this.refresh }),
     };
 
     panel = {

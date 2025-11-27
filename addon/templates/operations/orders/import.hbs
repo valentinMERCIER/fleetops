@@ -1,0 +1,19 @@
+<div class="h-screen w-full bg-gray-100 p-8 overflow-y-auto">
+    <div class="max-w-4xl mx-auto">
+        {{#if (eq this.currentScreen 1)}}
+        <OrderImport::UploadFile @onUpload={{this.handleUpload}} @isUploading={{this.isUploading}} @onCancel={{fn
+            this.setScreen 1}} @onViewScheduled={{fn this.setScreen 6}} />
+        {{else if (eq this.currentScreen 2)}}
+        <OrderImport::MapFields @onBack={{this.prevScreen}} @onImport={{this.nextScreen}} />
+        {{else if (eq this.currentScreen 3)}}
+        <OrderImport::ReviewIssues @onCancel={{fn this.setScreen 1}} @onContinue={{this.nextScreen}} />
+        {{else if (eq this.currentScreen 4)}}
+        <OrderImport::ImportSuccess @onSchedule={{fn this.setScreen 5}} @onNew={{fn this.setScreen 1}} @onDone={{fn
+            this.setScreen 1}} />
+        {{else if (eq this.currentScreen 5)}}
+        <OrderImport::ScheduleSettings @onCancel={{fn this.setScreen 4}} @onDone={{fn this.setScreen 6}} />
+        {{else if (eq this.currentScreen 6)}}
+        <OrderImport::ScheduledList @onClose={{fn this.setScreen 1}} @onEdit={{fn this.setScreen 5}} />
+        {{/if}}
+    </div>
+</div>

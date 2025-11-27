@@ -1,0 +1,94 @@
+<div class="space-y-4">
+    {{!-- Name --}}
+    <InputGroup @name="Name">
+        <Input @type="text" @value={{this.name}} {{on "input" this.handleNameChange}} disabled={{@isEditing}}
+            class="form-input w-full py-1.5" />
+    </InputGroup>
+
+    {{!-- Starting On --}}
+    <InputGroup @name="Starting On">
+        <Input @type="date" @value={{this.startDate}} min={{this.minDate}} disabled={{@isEditing}}
+            class="form-input w-full py-1.5" />
+    </InputGroup>
+
+    {{!-- Repeat Every --}}
+    <InputGroup @name="Repeat Every">
+        <div class="flex gap-3">
+            <Input @type="number" @value={{this.frequency}} min="1" disabled={{or this.isOnce @isEditing}}
+                class="form-input w-24 py-1.5" />
+            <select
+                class="form-select flex-1 py-1.5 disabled:opacity-50 disabled:bg-gray-100 dark:disabled:bg-gray-700 disabled:cursor-not-allowed"
+                disabled={{@isEditing}} {{on "change" this.updatePeriod}}>
+                {{#each this.periods as |period|}}
+                <option value={{period}} selected={{eq this.period period}}>{{period}}</option>
+                {{/each}}
+            </select>
+        </div>
+    </InputGroup>
+
+    {{!-- On (Days of Week) --}}
+    {{#if (eq this.period "Week")}}
+    <InputGroup @name="On">
+        <div class="flex gap-2">
+            {{#each this.daysOfWeek as |day|}}
+            <button type="button" disabled={{@isEditing}}
+                class="flex-1 px-2 py-1 border rounded-lg font-medium text-sm {{if (this.isDaySelected day) 'bg-blue-600 text-white border-blue-600' 'border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'}} {{if @isEditing 'opacity-50 cursor-not-allowed'}}"
+                {{on "click" (fn this.toggleDay day)}}>
+                {{day}}
+            </button>
+            {{/each}}
+        </div>
+    </InputGroup>
+    {{/if}}
+
+    {{!-- At --}}
+    <InputGroup @name="At">
+        <Input @type="time" @value={{this.time}} disabled={{@isEditing}} {{on "change" this.updateTime}}
+            class="form-input w-full py-1.5" />
+    </InputGroup>
+
+    {{!-- Ends --}}
+    <InputGroup @name="Ends">
+        <div class="space-y-3">
+            <div class="flex gap-6">
+                <label class="flex items-center gap-2">
+                    <input type="radio" name="ends" checked={{eq this.ends "never" }} {{on "change" (fn (mut
+                        this.ends) "never" )}} class="w-4 h-4 text-blue-600" />
+                    <span class="text-gray-700 dark:text-gray-300">Never</span>
+                </label>
+                <label class="flex items-center gap-2">
+                    <input type="radio" name="ends" checked={{eq this.ends "on" }} {{on "change" (fn (mut
+                        this.ends) "on" )}} class="w-4 h-4 text-blue-600" />
+                    <span class="text-gray-700 dark:text-gray-300">On</span>
+                </label>
+                <label class="flex items-center gap-2">
+                    <input type="radio" name="ends" checked={{eq this.ends "after" }} {{on "change" (fn (mut
+                        this.ends) "after" )}} class="w-4 h-4 text-blue-600" />
+                    <span class="text-gray-700 dark:text-gray-300">After</span>
+                </label>
+            </div>
+
+            {{#if (eq this.ends "on")}}
+            <div>
+                <Input @type="date" @value={{this.endDate}} min={{this.minDate}} {{on "change" this.updateEndDate}}
+                    class="form-input w-full max-w-xs py-1.5" placeholder="Select end date" />
+            </div>
+            {{/if}}
+
+            {{#if (eq this.ends "after")}}
+            <div class="flex items-center gap-2">
+                <Input @type="number" @value={{this.occurrences}} min="1" {{on "change" this.updateOccurrences}}
+                    class="form-input w-24 py-1.5" />
+                <span class="text-sm text-gray-700 dark:text-gray-300">occurrences</span>
+            </div>
+            {{/if}}
+        </div>
+    </InputGroup>
+
+    {{!-- Summary --}}
+    <div class="bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
+        <p class="text-sm text-blue-900 dark:text-blue-100">
+            This will run every {{this.frequency}} {{this.period}}(s) starting {{this.startDate}} at {{this.time}}
+        </p>
+    </div>
+</div>

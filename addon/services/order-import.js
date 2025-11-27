@@ -6,12 +6,20 @@ import { debug } from '@ember/debug';
 import { task } from 'ember-concurrency';
 
 export default class OrderImportService extends Service {
+    @service store;
     @service fetch;
     @service modalsManager;
     @service notifications;
     @service currentUser;
     @tracked queuedFiles = [];
     @tracked uploadedFiles = [];
+
+    @action promptBulkImport(options = {}) {
+        return this.modalsManager.show('modals/order-bulk-import', {
+            modalClass: 'modal-lg',
+            ...options,
+        });
+    }
 
     @action promptImport(order, options = {}) {
         return this.modalsManager.show('modals/order-import', {
@@ -38,7 +46,7 @@ export default class OrderImportService extends Service {
                 modal.startLoading();
                 modal.setOption('acceptButtonText', 'Uploading...');
 
-                const uploadedFiles = await this.queuedFiles.perform();
+                const uploadedFiles = await this.uploadQueue.perform();
 
                 this.modalsManager.setOption('acceptButtonText', 'Processing...');
                 this.modalsManager.setOption('isProcessing', true);
@@ -136,14 +144,14 @@ export default class OrderImportService extends Service {
         }
     }
 
-    #addFileToQueue(file) {
+    #addFileToQueue = (file) => {
         this.queuedFiles.pushObject(file);
         this.#checkqueuedFiles();
-    }
+    };
 
-    #removeFileFromQueue(file) {
+    #removeFileFromQueue = (file) => {
         file.queue?.remove(file);
         this.queuedFiles.removeObject(file);
         this.#checkqueuedFiles();
-    }
+    };
 }
