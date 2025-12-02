@@ -16,6 +16,7 @@ export default class OrderSocketEventsService extends Service {
     @service socket;
     @service currentUser;
     @service hostRouter;
+    @service store;
     @tracked subs = new Map(); // channelId -> { channel, order, onEvent, debounceMs, isActive, pumpPromise, debouncer }
     @tracked _company = null;
     reloadableEvents = new Set(['order.created', 'order.completed', 'waypoint.activity', 'entity.activity']);
@@ -161,6 +162,14 @@ export default class OrderSocketEventsService extends Service {
     }
 
     async startCompany() {
+        return this.startCompanyWithCallback();
+    }
+
+    /**
+     * Start company socket events with optional callback for order events
+     * @param {Function} callback - Optional callback function to handle order events
+     */
+    async startCompanyWithCallback(callback = null) {
         // Already running? no-op
         if (this._company?.isActive) return this._companyHandle();
 
@@ -184,6 +193,7 @@ export default class OrderSocketEventsService extends Service {
             channel,
             isActive: true,
             routeOff: () => this.hostRouter.off('routeWillChange', onRoute),
+            callback, // Store the callback for use in message processing
         };
 
         // Consume messages
@@ -200,6 +210,15 @@ export default class OrderSocketEventsService extends Service {
                     const { event, data } = msg || {};
                     debug(`[order-socket-events] company event "${event}" :: ${JSON.stringify(data)}`);
 
+                    // Call the callback if provided
+                    if (typeof callback === 'function') {
+                        try {
+                            callback(event, data);
+                        } catch (callbackError) {
+                            debug(`[order-socket-events] callback error for event "${event}": ${callbackError?.message ?? callbackError}`);
+                        }
+                    }
+
                     switch (event) {
                         case 'order.driver_assigned': {
                             // data: { id: <order_public_id>, driver_assigned: <driver_public_id> }
@@ -213,8 +232,25 @@ export default class OrderSocketEventsService extends Service {
                             break;
                         }
 
+                        case 'order.created': {
+                            // Handle order creation event - update store if needed
+                            debug(`[order-socket-events] Order created: ${data?.id || 'unknown'}`);
+                            break;
+                        }
+
+                        case 'order.updated': {
+                            // Handle order update event - update store if needed
+                            debug(`[order-socket-events] Order updated: ${data?.id || 'unknown'}`);
+                            break;
+                        }
+
+                        case 'order.deleted': {
+                            // Handle order deletion event - update store if needed
+                            debug(`[order-socket-events] Order deleted: ${data?.id || 'unknown'}`);
+                            break;
+                        }
+
                         // add more company-wide events here:
-                        // case 'order.updated': ...
                         // case 'order.completed': ...
                     }
                 }

@@ -421,7 +421,102 @@ export default class OperationsOrdersIndexController extends Controller {
 
     constructor() {
         super(...arguments);
-        this.orderSocketEvents.startCompany();
+        this.setupSocketEventsWithRefresh();
+    }
+
+    /**
+     * Setup company socket events with automatic table refresh
+     */
+    async setupSocketEventsWithRefresh() {
+        // Start company socket events with custom callback for order events
+        const { stop } = await this.orderSocketEvents.startCompanyWithCallback(
+            this.handleOrderSocketEvent.bind(this)
+        );
+        this._socketStopHandle = stop;
+    }
+
+    /**
+     * Handle order socket events and trigger table refresh when appropriate
+     */
+    @action
+    handleOrderSocketEvent(event, data) {
+        console.log(`📡 OrdersController: Received socket event "${event}":`, data);
+
+        switch (event) {
+            case 'order.created':
+                console.log('📦 OrdersController: New order created, refreshing table');
+                this.scheduleRefresh('created');
+                break;
+            
+            case 'order.updated':
+                // Only refresh on significant updates (status changes)
+                if (data?.status_changed || data?.driver_assigned_changed) {
+                    console.log('🔄 OrdersController: Order significantly updated, refreshing table');
+                    this.scheduleRefresh('updated');
+                }
+                break;
+                
+            case 'order.deleted':
+                console.log('🗑️ OrdersController: Order deleted, refreshing table');
+                this.scheduleRefresh('deleted');
+                break;
+        }
+    }
+
+    /**
+     * Schedule a debounced table refresh to avoid excessive refreshes
+     */
+    scheduleRefresh(eventType) {
+        // Clear any existing refresh timeout
+        if (this._refreshTimeout) {
+            clearTimeout(this._refreshTimeout);
+        }
+
+        // Determine delay based on event type
+        const refreshDelay = eventType === 'created' ? 1000 : 2000; // Faster for created, slower for updates
+        
+        this._refreshTimeout = setTimeout(() => {
+            this.performTableRefresh();
+            this._refreshTimeout = null;
+        }, refreshDelay);
+    }
+
+    /**
+     * Perform the actual table refresh
+     */
+    @action
+    async performTableRefresh() {
+        try {
+            console.log('🔄 OrdersController: Refreshing orders table...');
+            await this.orderActions.refresh();
+            console.log('✅ OrdersController: Table refresh completed successfully');
+        } catch (error) {
+            console.error('❌ OrdersController: Table refresh failed:', error);
+            // Fallback to basic refresh if needed
+            try {
+                await this.hostRouter.refresh();
+                console.log('✅ OrdersController: Fallback router refresh completed');
+            } catch (fallbackError) {
+                console.error('❌ OrdersController: Even fallback refresh failed:', fallbackError);
+            }
+        }
+    }
+
+    /**
+     * Cleanup resources when controller is destroyed
+     */
+    willDestroy() {
+        super.willDestroy();
+        
+        // Stop socket events
+        if (this._socketStopHandle) {
+            this._socketStopHandle();
+        }
+        
+        // Clear any pending refresh timeouts
+        if (this._refreshTimeout) {
+            clearTimeout(this._refreshTimeout);
+        }
     }
 
     @action changeLayout(mode) {
