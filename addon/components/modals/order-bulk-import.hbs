@@ -1,3 +1,4 @@
+{{!-- TODO rework of the modal structure --}}
 <Modal @modalIsOpened={{@modalIsOpened}} @options={{@options}} @onClose={{@onDecline}} @position="center"
     style="--flb-modal-width: 680px;" as |modal|>
     <modal.header @onClose={{@onDecline}} class="bg-gray-50 dark:bg-gray-900" as |header|>
@@ -16,7 +17,31 @@
     <modal.body>
 
         <div class="modal-body-container p-0">
-            {{#if (eq this.currentStep 1)}}
+            {{#if this.isAutoImporting}}
+            {{!-- Loading State: Auto Import Processing --}}
+            <div class="flex flex-col items-center h-96 justify-center bg-white dark:bg-gray-800">
+                <div class="text-center">
+                    <div class="mb-6">
+                        <FaIcon @icon="spinner" @spin={{true}} @size="4x" class="text-green-500" />
+                    </div>
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Importing Orders</h3>
+                    <p class="text-gray-500 dark:text-gray-400">All validation passed! Creating orders automatically...</p>
+                </div>
+            </div>
+
+            {{else if this.isUploading}}
+            {{!-- Loading State: File Upload & Mapping Detection --}}
+            <div class="flex flex-col items-center h-96 justify-center bg-white dark:bg-gray-800">
+                <div class="text-center">
+                    <div class="mb-6">
+                        <FaIcon @icon="spinner" @spin={{true}} @size="4x" class="text-blue-500" />
+                    </div>
+                    <h3 class="text-lg font-semibold text-gray-900 dark:text-white mb-2">Processing File</h3>
+                    <p class="text-gray-500 dark:text-gray-400">Uploading file and detecting field mappings...</p>
+                </div>
+            </div>
+
+            {{else if (eq this.currentStep 1)}}
             {{!-- Step 1: Upload --}}
             <div class="flex flex-col items-center  h-96 justify-center  bg-white dark:bg-gray-800">
                 <div class="text-center">
@@ -55,6 +80,7 @@
                                 <div class="w-2/3 relative">
                                     <select
                                         class="form-select w-full text-sm py-1 rounded-md border-gray-300 dark:bg-gray-700 dark:border-gray-600 {{if map.selectedColumn 'text-gray-900 dark:text-white' 'text-gray-400 dark:text-gray-500'}}"
+                                        data-field-key="{{map.key}}"
                                         {{on "change" (fn this.updateMapping map)}}>
                                         <option value="">choose field</option>
                                         {{#each this.csvHeaders as |header|}}
@@ -73,21 +99,109 @@
                                             </div>
                                         </Attach::Tooltip>
                                     </div>
+                                    {{else if (and map.conditionallyRequired (not map.selectedColumn)
+                                    this.isPickupGroupEmpty (or (eq map.key 'pickup_name') (eq map.key 'pickup_address')))}}
+                                    <div class="absolute inset-y-0 right-8 flex items-center">
+                                        <FaIcon @icon="exclamation-circle" class="text-red-500" />
+                                        <Attach::Tooltip @class="clean" @animation="scale" @placement="top">
+                                            <div
+                                                class="bg-white dark:bg-gray-300 px-2 py-1 text-xs rounded-sm text-red-500 font-semibold whitespace-nowrap">
+                                                Either Pickup Name/ID or Pickup Address is required
+                                            </div>
+                                        </Attach::Tooltip>
+                                    </div>
+                                    {{else if (and map.conditionallyRequired (not map.selectedColumn)
+                                    this.isDropoffGroupEmpty (or (eq map.key 'dropoff_name') (eq map.key
+                                    'dropoff_address')))}}
+                                    <div class="absolute inset-y-0 right-8 flex items-center">
+                                        <FaIcon @icon="exclamation-circle" class="text-red-500" />
+                                        <Attach::Tooltip @class="clean" @animation="scale" @placement="top">
+                                            <div
+                                                class="bg-white dark:bg-gray-300 px-2 py-1 text-xs rounded-sm text-red-500 font-semibold whitespace-nowrap">
+                                                Either Dropoff Name/ID or Dropoff Address is required
+                                            </div>
+                                        </Attach::Tooltip>
+                                    </div>
                                     {{/if}}
                                 </div>
                             </div>
+
+                            {{!-- Date Format Field - Show only when Scheduled At is mapped --}}
+                            {{#if (and (eq map.key 'scheduled_at') map.selectedColumn)}}
+                            <div class="flex items-start justify-between" data-test-date-format-section>
+                                <div class="w-1/3"></div>
+                                <div class="w-2/3 relative">
+                                    <div class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-2 items-center">
+                                        
+                                        {{!-- Row 1: Label + Input --}}
+                                        <label class="text-gray-600 dark:text-gray-400 text-xs">Format:</label>
+                                        <div class="relative">
+                                            <input
+                                                type="text"
+                                                class="form-input w-full text-sm py-1 rounded-md border-gray-300 dark:bg-gray-700 dark:border-gray-600 {{if this.dateFormat 'text-gray-900 dark:text-white' 'text-gray-400 dark:text-gray-500'}}"
+                                                placeholder="Enter date format (e.g., yyyy-MM-dd HH:mm:ss)"
+                                                value={{this.dateFormat}}
+                                                {{on "input" this.updateDateFormat}} />
+                                            {{#if this.dateFormatError}}
+                                            <div class="absolute inset-y-0 right-8 flex items-center">
+                                                <FaIcon @icon="exclamation-circle" class="text-red-500" />
+                                                <Attach::Tooltip @class="clean" @animation="scale" @placement="top">
+                                                    <div class="bg-white dark:bg-gray-300 px-2 py-1 text-xs rounded-sm text-red-500 font-semibold">
+                                                        {{this.dateFormatError}}
+                                                    </div>
+                                                </Attach::Tooltip>
+                                            </div>
+                                            {{/if}}
+                                        </div>
+                                        
+                                        {{!-- Row 2: Empty + Preview --}}
+                                        <div></div>
+                                        <div class="text-xs">
+                                            {{#if this.dateFormat}}
+                                            <span class="{{if this.isDateFormatValid 'text-green-600 dark:text-green-400' 'text-red-500'}}">
+                                                {{this.dateFormatPreview}}
+                                            </span>
+                                            {{/if}}
+                                        </div>
+                                        
+                                        {{!-- Row 3: Empty + Common Formats --}}
+                                        <div></div>
+                                        <div>
+                                            <details class="mt-1">
+                                                <summary class="cursor-pointer text-xs text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 select-none">
+                                                     Common Formats
+                                                </summary>
+                                                <div class="mt-2 space-y-1 h-fit">
+                                                    {{#each this.commonDateFormats as |formatOption|}}
+                                                    <button 
+                                                        type="button"
+                                                        class="block w-full text-left px-2 py-1 text-xs rounded hover:bg-gray-100 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-600"
+                                                        {{on "click" (fn this.selectCommonFormat formatOption.value)}}>
+                                                        {{formatOption.label}}
+                                                    </button>
+                                                    {{/each}}
+                                                </div>
+                                            </details>
+                                        </div>
+                                        
+                                    </div>
+                                </div>
+                            </div>
+                            {{/if}}
+
                             {{/each}}
                         </div>
                     </div>
                     {{/each}}
+
                 </div>
             </div>
 
             {{else if (eq this.currentStep 3)}}
             {{!-- Step 3: Review --}}
             <div class="p-6 overflow-y-auto h-96 bg-white dark:bg-gray-800">
-                <div class="border border-red-200 h-full rounded-md p-4">
-                    <h4 class="text-red-500 font-bold mb-4">{{this.dryRunResults.length}} tasks will not be imported
+                <div class="border border-red-200 overflow-y-auto h-full rounded-md p-4">
+                    <h4 class="text-red-500 font-bold mb-4">{{this.dryRunResults.length}} orders will not be imported
                     </h4>
                     <div class="space-y-3">
                         {{#each this.dryRunResults as |error|}}
@@ -172,8 +286,8 @@
                 </button>
             </div>
             {{else}}
-            <button class="btn btn-default" type="button" {{on "click" (if (or (eq this.currentStep 1) (eq
-                this.currentStep 3)) @onDecline this.prevStep)}}>
+            <button class="btn btn-default" type="button" {{on "click" (if (eq this.currentStep 1) @onDecline (if (eq
+                this.currentStep 3) this.reset this.prevStep))}}>
                 {{#if (eq this.currentStep 3)}}Cancel Import{{else if (eq this.currentStep 5)}}Back{{else}}Back{{/if}}
             </button>
 
