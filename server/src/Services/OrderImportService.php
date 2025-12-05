@@ -13,6 +13,7 @@ use Fleetbase\FleetOps\Models\Entity;
 use Fleetbase\FleetOps\Models\TrackingStatus;
 use Fleetbase\FleetOps\Models\TrackingNumber;
 use Fleetbase\FleetOps\Models\Waypoint;
+use Fleetbase\FleetOps\Models\Driver;
 use Fleetbase\FleetOps\Support\ValidationResult;
 use Fleetbase\Models\File;
 use Illuminate\Http\UploadedFile;
@@ -92,11 +93,11 @@ class OrderImportService
             'shipping_address', 'to_address', 'dropoff address', 'delivery address'
         ],
         'pickup_name' => [
-            'pickup_name', 'origin_name', 'sender', 'from_name', 'shipper_name',
+            'pickup', 'pickup_name', 'origin_name', 'sender', 'from_name', 'shipper_name',
             'collection_contact', 'pickup_contact', 'pickup name'
         ],
         'dropoff_name' => [
-            'dropoff_name', 'recipient_name', 'receiver_name', 'delivery_name',
+            'dropoff', 'dropoff_name', 'recipient_name', 'receiver_name', 'delivery_name',
             'consignee_name', 'to_name', 'dropoff name', 'recipient name'
         ],
         
@@ -115,6 +116,25 @@ class OrderImportService
             'notes', 'comments', 'remarks', 'instructions', 'special_instructions',
             'delivery_instructions', 'message', 'description', 'memo',
             'special instructions', 'delivery instructions'
+        ],
+        
+        // Driver fields
+        'driver_name' => [
+            'driver', 'driver_name', 'driver_full_name', 'assigned_driver', 
+            'driver_person', 'delivery_driver', 'courier', 'driver name'
+        ],
+        'driver_email' => [
+            'driver_email', 'driver_e_mail', 'driver_mail', 'driver_email_address',
+            'driver email', 'driver e-mail', 'driver email address'
+        ],
+        'driver_phone' => [
+            'driver_phone', 'driver_mobile', 'driver_tel', 'driver_telephone',
+            'driver_contact', 'driver_number', 'driver phone', 'driver mobile',
+            'driver contact number', 'driver cell', 'driver cellphone'
+        ],
+        'driver_id' => [
+            'driver_id', 'driver_public_id', 'driver_identifier', 'driver_license',
+            'drivers_license_number', 'driver_license_number', 'driver id'
         ],
         
         // Package details
@@ -140,48 +160,62 @@ class OrderImportService
      * Base validation rules for order import
      */
     protected array $baseValidationRules = [
-        // Required customer information
-        'customer_name' => 'required|string|min:2|max:255',
-        'customer_phone' => 'required_without:customer_email|nullable|regex:/^\+?[0-9]{10,15}$/',
-        'customer_email' => 'required_without:customer_phone|nullable|email',
+        // Required fields for order creation (type validation handled in addCustomValidation)
+        'type' => 'required|string',
         
-        // Required address information
-        'pickup_address' => 'required|string|min:10|max:500',
-        'dropoff_address' => 'required|string|min:10|max:500',
-        
-        // Optional but validated fields
+        // Location fields (validation handled entirely in custom logic)
         'pickup_name' => 'nullable|string|max:255',
-        'dropoff_name' => 'nullable|string|max:255',
+        'pickup_address' => 'nullable|string|max:500',
+        'dropoff_name' => 'nullable|string|max:255', 
+        'dropoff_address' => 'nullable|string|max:500',
+        
+        // Optional customer information
+        'customer_name' => 'nullable|string|min:2|max:255',
+        'customer_phone' => 'nullable|regex:/^\+?[0-9]{10,15}$/',
+        'customer_email' => 'nullable|email',
+        
+        // Optional order details
         'scheduled_at' => 'nullable|date|after:now',
         'reference' => 'nullable|string|max:100',
         'notes' => 'nullable|string|max:1000',
         'quantity' => 'nullable|integer|min:1|max:9999',
         'weight' => 'nullable|numeric|min:0|max:99999',
-        'type' => 'nullable|string|in:delivery,pickup,transport',
-        'priority' => 'nullable|string|in:low,normal,high,urgent'
+        'priority' => 'nullable|string|in:low,normal,high,urgent',
+        
+        // Driver validation
+        'driver_name' => 'nullable|string|min:2|max:255',
+        'driver_email' => 'nullable|email',
+        'driver_phone' => 'nullable|regex:/^\+?[0-9]{10,15}$/',
+        'driver_id' => 'nullable|string|max:100'
     ];
 
     /**
      * Custom validation messages
      */
     protected array $validationMessages = [
-        'customer_name.required' => 'Customer name is required',
+        // Required fields
+        'type.required' => 'Order type is required',
+        'type.in' => 'Type must be one of: transport, storefront',
+        
+        // Pickup and dropoff validation handled in custom logic
+        
+        // Optional customer fields
         'customer_name.min' => 'Customer name must be at least 2 characters',
-        'customer_phone.required_without' => 'Phone number is required when email is not provided',
         'customer_phone.regex' => 'Phone number must be 10-15 digits (optional + prefix)',
-        'customer_email.required_without' => 'Email is required when phone number is not provided',
         'customer_email.email' => 'Please provide a valid email address',
-        'pickup_address.required' => 'Pickup address is required',
-        'pickup_address.min' => 'Pickup address must be at least 10 characters',
-        'dropoff_address.required' => 'Dropoff address is required',
-        'dropoff_address.min' => 'Dropoff address must be at least 10 characters',
+        
+        // Optional fields
         'scheduled_at.date' => 'Scheduled time must be a valid date',
         'scheduled_at.after' => 'Scheduled time must be in the future',
         'quantity.integer' => 'Quantity must be a whole number',
         'quantity.min' => 'Quantity must be at least 1',
         'weight.numeric' => 'Weight must be a number',
-        'type.in' => 'Type must be one of: delivery, pickup, transport',
-        'priority.in' => 'Priority must be one of: low, normal, high, urgent'
+        'priority.in' => 'Priority must be one of: low, normal, high, urgent',
+        
+        // Driver validation messages
+        'driver_name.min' => 'Driver name must be at least 2 characters',
+        'driver_email.email' => 'Please provide a valid driver email address',
+        'driver_phone.regex' => 'Driver phone number must be 10-15 digits (optional + prefix)'
     ];
 
     /**
@@ -527,25 +561,69 @@ class OrderImportService
      */
     public function mapFields(array $row, $template = null): array
     {
+        \Log::info("DEBUG: mapFields called", [
+            'template_provided' => $template !== null,
+            'template_type' => is_object($template) ? 'object' : (is_array($template) ? 'array' : gettype($template)),
+            'template_has_date_formats' => $template ? (
+                is_object($template) ? isset($template->date_formats) : isset($template['date_formats'])
+            ) : false,
+            'template_date_formats_value' => $template ? (
+                is_object($template) ? ($template->date_formats ?? 'NOT_SET') : ($template['date_formats'] ?? 'NOT_SET')
+            ) : 'NO_TEMPLATE'
+        ]);
+        
         // Get mappings from template or auto-detect
         $mappings = [];
         $autoDetected = false;
         
-        if ($template && !empty($template->field_mappings ?? [])) {
+        if ($template) {
             // Use template-defined mappings (handle both objects and arrays)
-            $mappings = is_object($template) ? ($template->field_mappings ?? []) : $template['field_mappings'];
+            $templateMappings = is_object($template) ? ($template->field_mappings ?? []) : ($template['field_mappings'] ?? []);
+            
+            if (!empty($templateMappings)) {
+                // Template mappings are in format: orderField => csvColumn
+                // We need to flip them to: csvColumn => orderField
+                $mappings = array_flip($templateMappings);
+                \Log::debug("Using template mappings", [
+                    'original_template' => $templateMappings,
+                    'flipped_mappings' => $mappings
+                ]);
+            } else {
+                // Auto-detect from row headers
+                $headers = array_keys($row);
+                $detected = $this->detectFieldMappings($headers);
+                $mappings = $detected['header_to_field'];
+                $autoDetected = true;
+                \Log::debug("Auto-detecting mappings", ['headers' => $headers, 'detected' => $mappings]);
+            }
         } else {
             // Auto-detect from row headers
             $headers = array_keys($row);
             $detected = $this->detectFieldMappings($headers);
             $mappings = $detected['header_to_field'];
             $autoDetected = true;
+            \Log::debug("No template, auto-detecting", ['headers' => $headers, 'detected' => $mappings]);
         }
         
         // Apply mappings
         $mappedData = [];
         foreach ($mappings as $csvColumn => $orderField) {
             if (isset($row[$csvColumn]) && $row[$csvColumn] !== '') {
+                // Handle generic "customer" field - map it to customer_name if no specific customer field exists
+                if ($orderField === 'customer' && !isset($mappedData['customer_name']) && !isset($mappedData['customer_email']) && !isset($mappedData['customer_phone'])) {
+                    $orderField = 'customer_name';
+                }
+                
+                \Log::debug("DEBUG: About to transform value", [
+                    'csv_column' => $csvColumn,
+                    'order_field' => $orderField,
+                    'raw_value' => $row[$csvColumn],
+                    'template_passed' => $template !== null,
+                    'template_date_formats' => $template ? (
+                        is_object($template) ? ($template->date_formats ?? 'NOT_SET') : ($template['date_formats'] ?? 'NOT_SET')
+                    ) : 'NO_TEMPLATE'
+                ]);
+                
                 $mappedData[$orderField] = $this->transformValue(
                     $row[$csvColumn],
                     $orderField,
@@ -553,6 +631,15 @@ class OrderImportService
                 );
             }
         }
+        
+        \Log::info("Field mapping applied", [
+            'mappings_used' => $mappings,
+            'row_data' => $row,
+            'mapped_result' => $mappedData,
+            'customer_fields_mapped' => array_filter($mappedData, function($key) {
+                return str_contains($key, 'customer');
+            }, ARRAY_FILTER_USE_KEY)
+        ]);
         
         // Apply default values from template
         $defaultValues = null;
@@ -732,10 +819,65 @@ class OrderImportService
             return null;
         }
         
+        \Log::debug("DEBUG: transformValue called", [
+            'field' => $field,
+            'value' => $value,
+            'template_provided' => $template !== null,
+            'template_type' => is_object($template) ? 'object' : (is_array($template) ? 'array' : gettype($template))
+        ]);
+        
         // Apply field-specific transformations based on field name patterns
         switch (true) {
             case str_contains($field, '_at') || str_contains($field, 'date') || str_contains($field, 'time'):
-                return $this->parseDateField($value, $template);
+                \Log::info("DEBUG: Date field detected, calling parseDateField", [
+                    'field' => $field,
+                    'value' => $value,
+                    'template_has_date_formats' => $template ? (
+                        is_object($template) ? isset($template->date_formats) : isset($template['date_formats'])
+                    ) : false
+                ]);
+                
+                $parsedDate = $this->parseDateField($value, $template, $field);
+                
+                \Log::info("DEBUG: parseDateField result", [
+                    'field' => $field,
+                    'original_value' => $value,
+                    'parsed_date' => $parsedDate,
+                    'parsing_successful' => $parsedDate !== null
+                ]);
+                
+                // If parsing failed but we have a template with custom formats,
+                // return the original value so validation can catch the format mismatch
+                if ($parsedDate === null && $template) {
+                    $fieldSpecificFormats = is_object($template) ? ($template->field_date_formats ?? null) : ($template['field_date_formats'] ?? null);
+                    $legacyDateFormats = is_object($template) ? ($template->date_formats ?? null) : ($template['date_formats'] ?? null);
+                    
+                    $hasCustomFormats = false;
+                    if ($fieldSpecificFormats && isset($fieldSpecificFormats[$field])) {
+                        $hasCustomFormats = true;
+                    } elseif ($legacyDateFormats && !empty($legacyDateFormats)) {
+                        $hasCustomFormats = true;
+                    }
+                    
+                    \Log::warning("DEBUG: Date parsing failed, checking for custom formats", [
+                        'field' => $field,
+                        'original_value' => $value,
+                        'field_specific_formats' => $fieldSpecificFormats,
+                        'legacy_date_formats' => $legacyDateFormats,
+                        'has_custom_formats' => $hasCustomFormats
+                    ]);
+                    
+                    if ($hasCustomFormats) {
+                        \Log::warning("DEBUG: Custom date formats found, returning unparsed value for validation", [
+                            'field' => $field,
+                            'original_value' => $value,
+                            'field_specific_format' => $fieldSpecificFormats[$field] ?? null,
+                            'legacy_formats' => $legacyDateFormats
+                        ]);
+                        return $value; // Return unparsed value for validation to catch
+                    }
+                }
+                return $parsedDate;
                 
             case str_contains($field, 'phone') || str_contains($field, 'mobile') || str_contains($field, 'tel'):
                 return $this->normalizePhoneNumber($value);
@@ -767,7 +909,46 @@ class OrderImportService
      * @param ImportTemplate|object|array|null $template Import template with date formats
      * @return string|null Parsed date in Y-m-d H:i:s format or null if parsing fails
      */
-    protected function parseDateField(string $value, $template = null): ?string
+    /**
+     * Convert user-friendly date format to PHP date format
+     * 
+     * @param string $userFormat User format like 'yyyy/MM/dd'
+     * @return string PHP format like 'Y/m/d'
+     */
+    protected function convertUserFormatToPhpFormat(string $userFormat): string
+    {
+        // Use a single regex replacement to handle all patterns correctly
+        // This prevents issues where dd -> d -> j due to sequential replacement
+        $phpFormat = preg_replace_callback(
+            '/yyyy|yy|MM|M(?!M)|dd|d(?!d)|HH|H(?!H)|mm|m(?!m)|ss|s(?!s)/',
+            function ($matches) {
+                $pattern = $matches[0];
+                switch ($pattern) {
+                    case 'yyyy': return 'Y';   // 4-digit year
+                    case 'yy': return 'y';     // 2-digit year
+                    case 'MM': return 'm';     // Month with leading zeros (01-12)
+                    case 'M': return 'n';      // Month without leading zeros (1-12)
+                    case 'dd': return 'd';     // Day with leading zeros (01-31)
+                    case 'd': return 'j';      // Day without leading zeros (1-31)
+                    case 'HH': return 'H';     // 24-hour format with leading zeros
+                    case 'H': return 'G';      // 24-hour format without leading zeros
+                    case 'mm': return 'i';     // Minutes with leading zeros
+                    case 'ss': return 's';     // Seconds with leading zeros
+                    default: return $pattern;
+                }
+            },
+            $userFormat
+        );
+        
+        \Log::debug("Converted user format to PHP format", [
+            'user_format' => $userFormat,
+            'php_format' => $phpFormat
+        ]);
+        
+        return $phpFormat;
+    }
+
+    protected function parseDateField(string $value, $template = null, string $field = null): ?string
     {
         if (empty(trim($value))) {
             return null;
@@ -775,23 +956,130 @@ class OrderImportService
         
         $value = trim($value);
         
+        \Log::info("DEBUG: parseDateField called", [
+            'value' => $value,
+            'template_provided' => $template !== null,
+            'template_type' => is_object($template) ? 'object' : (is_array($template) ? 'array' : gettype($template)),
+            'template_content' => $template
+        ]);
+        
         try {
-            // Check template for specific date formats first
-            $dateFormats = null;
+            // Check template for field-specific date formats first, then fallback to legacy formats
+            $fieldSpecificFormats = null;
+            $legacyDateFormats = null;
+            
             if ($template) {
-                $dateFormats = is_object($template) ? ($template->date_formats ?? null) : ($template['date_formats'] ?? null);
+                // New field-specific date formats
+                $fieldSpecificFormats = is_object($template) ? ($template->field_date_formats ?? null) : ($template['field_date_formats'] ?? null);
+                
+                // Legacy date formats (backward compatibility)
+                $legacyDateFormats = is_object($template) ? ($template->date_formats ?? null) : ($template['date_formats'] ?? null);
+                
+                \Log::info("DEBUG: Template date formats extracted", [
+                    'template_is_object' => is_object($template),
+                    'template_is_array' => is_array($template),
+                    'field_specific_formats' => $fieldSpecificFormats,
+                    'legacy_date_formats' => $legacyDateFormats
+                ]);
+            } else {
+                \Log::warning("DEBUG: No template provided to parseDateField", [
+                    'value' => $value,
+                    'field' => $field ?? 'unknown'
+                ]);
             }
             
-            if ($dateFormats) {
-                foreach ($dateFormats as $format) {
+            // Priority 1: Field-specific date formats
+            $targetFormats = null;
+            $formatSource = 'none';
+            
+            if ($fieldSpecificFormats && $field && isset($fieldSpecificFormats[$field])) {
+                $targetFormats = [$fieldSpecificFormats[$field]];
+                $formatSource = 'field_specific';
+                \Log::debug("Using field-specific date format", [
+                    'field' => $field,
+                    'format' => $fieldSpecificFormats[$field],
+                    'value_to_parse' => $value
+                ]);
+            }
+            // Priority 2: Legacy date formats (backward compatibility)
+            elseif ($legacyDateFormats && !empty($legacyDateFormats)) {
+                $targetFormats = $legacyDateFormats;
+                $formatSource = 'legacy';
+                \Log::debug("Using legacy date formats (backward compatibility)", [
+                    'field' => $field,
+                    'legacy_formats' => $legacyDateFormats,
+                    'value_to_parse' => $value
+                ]);
+            }
+            
+            // If we have custom formats (either field-specific or legacy), ONLY use those
+            if ($targetFormats && !empty($targetFormats)) {
+                \Log::debug("Parsing date with custom formats (no fallback)", [
+                    'format_source' => $formatSource,
+                    'field' => $field,
+                    'target_formats' => $targetFormats,
+                    'value_to_parse' => $value
+                ]);
+                
+                foreach ($targetFormats as $userFormat) {
                     try {
-                        $date = Carbon::createFromFormat($format, $value);
-                        return $date->format('Y-m-d H:i:s');
+                        // Convert user format (yyyy/MM/dd) to PHP format (Y/m/d)
+                        $phpFormat = $this->convertUserFormatToPhpFormat($userFormat);
+                        
+                        $date = Carbon::createFromFormat($phpFormat, $value);
+                        
+                        // Validate that the parsed date exactly matches the input
+                        // Use the PHP format for validation, not the user format
+                        if ($date && $date->format($phpFormat) === $value) {
+                            \Log::debug("Successfully parsed date with custom format", [
+                                'format_source' => $formatSource,
+                                'field' => $field,
+                                'user_format' => $userFormat,
+                                'php_format' => $phpFormat,
+                                'original_value' => $value,
+                                'parsed_date' => $date->format('Y-m-d H:i:s'),
+                                'validation_check' => 'passed'
+                            ]);
+                            return $date->format('Y-m-d H:i:s');
+                        } else {
+                            \Log::debug("Date format validation failed - parsed date doesn't match input", [
+                                'format_source' => $formatSource,
+                                'field' => $field,
+                                'user_format' => $userFormat,
+                                'php_format' => $phpFormat,
+                                'original_value' => $value,
+                                'parsed_date' => $date ? $date->format('Y-m-d H:i:s') : 'null',
+                                'reformatted_value' => $date ? $date->format($phpFormat) : 'null'
+                            ]);
+                        }
                     } catch (Exception $e) {
+                        \Log::debug("Failed to parse date with custom format", [
+                            'format_source' => $formatSource,
+                            'field' => $field,
+                            'user_format' => $userFormat,
+                            'php_format' => isset($phpFormat) ? $phpFormat : 'conversion_failed',
+                            'value' => $value,
+                            'error' => $e->getMessage()
+                        ]);
                         continue;
                     }
                 }
+                
+                // If we reach here, none of the custom formats worked
+                \Log::warning("Date parsing failed - value doesn't match any custom formats", [
+                    'format_source' => $formatSource,
+                    'field' => $field,
+                    'value' => $value,
+                    'custom_formats' => $targetFormats,
+                    'suggestion' => 'Check that the date format matches the data format'
+                ]);
+                return null;
             }
+            
+            // Only use fallback parsing if no custom formats were specified
+            \Log::debug("No custom date formats specified, using fallback parsing", [
+                'value' => $value
+            ]);
             
             // Try common date formats
             foreach ($this->dateFormats as $dateFormat) {
@@ -924,18 +1212,67 @@ class OrderImportService
      */
     public function validateRow(array $mappedData, $template = null): ValidationResult
     {
+        // Filter out null and empty string values before validation to prevent
+        // nullable fields from being validated against length constraints
+        $filteredData = $this->filterDataForValidation($mappedData);
+        
+        // Debug log the validation data
+        \Log::debug("Validation data", [
+            'original_mapped' => $mappedData,
+            'filtered_for_validation' => $filteredData
+        ]);
+        
         // Get validation rules
         $rules = $this->getValidationRules($template);
         
-        // Create Laravel validator
+        // Debug log the validation rules being applied
+        \Log::debug("Validation rules", [
+            'rules' => $rules,
+            'fields_to_validate' => array_keys($filteredData)
+        ]);
+        
+        // Get dynamic error messages
+        $messages = $this->getValidationMessages($template);
+        
+        // Create Laravel validator  
         $validator = \Validator::make(
-            $mappedData,
+            $filteredData,
             $rules,
-            $this->validationMessages
+            $messages
         );
         
         // Create validation result
         $result = new ValidationResult($validator);
+        
+        // Override Laravel validation errors for pickup/dropoff if they exist
+        // This prevents false positives when using names instead of addresses
+        if ($result->hasError('pickup_address') && !empty($mappedData['pickup_name'])) {
+            $result->removeError('pickup_address');
+        }
+        if ($result->hasError('dropoff_address') && !empty($mappedData['dropoff_name'])) {
+            $result->removeError('dropoff_address');
+        }
+        
+        // Override Laravel date validation errors when we have custom date format mismatches
+        if ($result->hasError('scheduled_at') && is_string($mappedData['scheduled_at'] ?? null)) {
+            // Check if we have custom date formats in template
+            $hasCustomFormats = false;
+            if ($template) {
+                // Check for field-specific formats first, then legacy formats
+                $fieldSpecificFormats = is_object($template) ? ($template->field_date_formats ?? []) : ($template['field_date_formats'] ?? []);
+                $legacyFormats = is_object($template) ? ($template->date_formats ?? []) : ($template['date_formats'] ?? []);
+                $hasCustomFormats = !empty($fieldSpecificFormats) || !empty($legacyFormats);
+            }
+            
+            if ($hasCustomFormats) {
+                // Remove Laravel's generic date errors in favor of our custom format mismatch error
+                $result->removeError('scheduled_at');
+                \Log::debug("Removed Laravel date validation errors in favor of custom format validation", [
+                    'value' => $mappedData['scheduled_at'],
+                    'has_custom_formats' => $hasCustomFormats
+                ]);
+            }
+        }
         
         // Add custom business logic validation
         $this->addCustomValidation($mappedData, $result, $template);
@@ -1114,6 +1451,17 @@ class OrderImportService
     {
         $rules = $this->baseValidationRules;
         
+        // Get valid order types from database and update type validation rule
+        $validOrderTypes = $this->getValidOrderTypes();
+        if (!empty($validOrderTypes)) {
+            // Use basic string validation - custom validation handles case-insensitive matching
+            $rules['type'] = 'required|string';
+        }
+        
+        // Remove validation rules for unmapped address fields to prevent false positives
+        // This ensures only mapped fields are validated by Laravel
+        $rules = $this->filterRulesForMappedFields($rules);
+        
         if ($template) {
             $templateRules = null;
             if (is_object($template)) {
@@ -1130,6 +1478,101 @@ class OrderImportService
         
         return $rules;
     }
+    
+    /**
+     * Get valid order types from the database
+     * 
+     * @return array Array of valid order type keys
+     */
+    protected function getValidOrderTypes(): array
+    {
+        try {
+            // Get all order configs for the current company
+            $companyUuid = session('company');
+            if (!$companyUuid) {
+                // Fallback to default types if no company context
+                return ['transport', 'storefront'];
+            }
+            
+            $orderTypes = \DB::table('order_configs')
+                ->where('company_uuid', $companyUuid)
+                ->whereNull('deleted_at')
+                ->pluck('key')
+                ->filter()
+                ->unique()
+                ->values()
+                ->toArray();
+            
+            // If no order types found, return default
+            return !empty($orderTypes) ? $orderTypes : ['transport', 'storefront'];
+        } catch (\Exception $e) {
+            // Fallback to default types if query fails
+            Log::warning('Failed to fetch order types for validation', ['error' => $e->getMessage()]);
+            return ['transport', 'storefront'];
+        }
+    }
+    
+    /**
+     * Get valid order types with both keys and names for matching
+     * 
+     * @return array Array with key => name pairs for lookup
+     */
+    protected function getValidOrderTypesWithNames(): array
+    {
+        try {
+            $companyUuid = session('company');
+            if (!$companyUuid) {
+                return [
+                    'transport' => 'Transport',
+                    'storefront' => 'Storefront'
+                ];
+            }
+            
+            $orderConfigs = \DB::table('order_configs')
+                ->where('company_uuid', $companyUuid)
+                ->whereNull('deleted_at')
+                ->select('key', 'name')
+                ->get();
+            
+            $types = [];
+            foreach ($orderConfigs as $config) {
+                if (!empty($config->key)) {
+                    $types[$config->key] = $config->name ?? $config->key;
+                }
+            }
+            
+            return !empty($types) ? $types : [
+                'transport' => 'Transport',
+                'storefront' => 'Storefront'
+            ];
+            
+        } catch (\Exception $e) {
+            \Log::warning("Failed to fetch order types with names: " . $e->getMessage());
+            return [
+                'transport' => 'Transport',
+                'storefront' => 'Storefront'
+            ];
+        }
+    }
+    
+    /**
+     * Get validation messages including dynamic ones
+     * 
+     * @param ImportTemplate|object|array|null $template Import template
+     * @return array Validation messages
+     */
+    protected function getValidationMessages($template = null): array
+    {
+        $messages = $this->validationMessages;
+        
+        // Update type validation message with actual valid types
+        $validOrderTypes = $this->getValidOrderTypes();
+        if (!empty($validOrderTypes)) {
+            $messages['type.in'] = 'Type must be one of: ' . implode(', ', $validOrderTypes);
+        }
+        
+        return $messages;
+    }
 
     /**
      * Add custom business logic validation
@@ -1140,6 +1583,14 @@ class OrderImportService
      */
     protected function addCustomValidation(array $data, ValidationResult $result, $template = null): void
     {
+        // Validate pickup/dropoff requirements
+        $this->validateLocationRequirements($data, $result);
+        
+        // Validate order type with case-insensitive matching
+        if (!empty($data['type'])) {
+            $this->validateOrderType($data, $result);
+        }
+        
         // Validate phone number format more thoroughly
         if (!empty($data['customer_phone'])) {
             $phone = preg_replace('/[^0-9+]/', '', $data['customer_phone']);
@@ -1161,6 +1612,9 @@ class OrderImportService
         if (!empty($data['scheduled_at'])) {
             $this->validateScheduling($data, $result, $template);
         }
+        
+        // Validate driver assignment if provided
+        $this->validateDriverAssignment($data, $result, $template);
         
         // Validate reference uniqueness if required
         if ($template && isset($template->require_unique_reference) && $template->require_unique_reference && !empty($data['reference'])) {
@@ -1209,6 +1663,150 @@ class OrderImportService
     }
 
     /**
+     * Validate driver assignment if provided
+     * 
+     * @param array $data Row data  
+     * @param ValidationResult $result Validation result
+     * @param ImportTemplate|object|array|null $template Import template
+     */
+    protected function validateDriverAssignment(array $data, ValidationResult $result, $template = null): void
+    {
+        // Check if any driver fields are provided
+        $driverIdentifiers = [
+            $data['driver_name'] ?? null,
+            $data['driver_email'] ?? null, 
+            $data['driver_phone'] ?? null,
+            $data['driver_id'] ?? null
+        ];
+        
+        $hasDriverInfo = !empty(array_filter($driverIdentifiers));
+        
+        if (!$hasDriverInfo) {
+            // No driver info provided - this is fine, driver assignment is optional
+            return;
+        }
+        
+        // If driver info is provided, try to resolve the driver
+        $driver = null;
+        $identifierUsed = null;
+        
+        foreach ($driverIdentifiers as $identifier) {
+            if (!empty($identifier)) {
+                $driver = Driver::findByIdentifier($identifier);
+                if ($driver) {
+                    $identifierUsed = $identifier;
+                    break;
+                }
+            }
+        }
+        
+        if (!$driver) {
+            // Driver info provided but driver not found
+            $result->addError(
+                'driver_assignment',
+                'Driver not found in system. Driver must exist before assignment.'
+            );
+            $result->addSuggestion(
+                'driver_assignment',
+                'Create driver in system first or check the driver identifier: ' . 
+                implode(', ', array_filter($driverIdentifiers))
+            );
+        } else {
+            // Driver found - add success note
+            $result->addMetadata('driver_resolved', [
+                'driver_id' => $driver->public_id,
+                'driver_name' => $driver->name,
+                'identifier_used' => $identifierUsed
+            ]);
+        }
+        
+        // Additional driver-specific validations
+        if (!empty($data['driver_phone'])) {
+            $phone = preg_replace('/[^0-9+]/', '', $data['driver_phone']);
+            if (strlen($phone) > 0 && strlen($phone) < 10) {
+                $result->addError('driver_phone', 'Driver phone number is too short (minimum 10 digits)');
+            }
+            if (strlen($phone) > 15) {
+                $result->addError('driver_phone', 'Driver phone number is too long (maximum 15 digits)');
+            }
+        }
+    }
+
+    /**
+     * Validate order type with case-insensitive matching and trimming
+     * 
+     * @param array $data Row data
+     * @param ValidationResult $result Validation result
+     */
+    protected function validateOrderType(array $data, ValidationResult $result): void
+    {
+        $type = trim($data['type'] ?? '');
+        
+        if (empty($type)) {
+            $result->addError('type', 'Order type is required');
+            return;
+        }
+        
+        // Get valid order types with names
+        $validTypesWithNames = $this->getValidOrderTypesWithNames();
+        $validTypes = array_keys($validTypesWithNames);
+        
+        if (empty($validTypes)) {
+            // Fallback to default types
+            $validTypes = ['transport', 'storefront'];
+            $validTypesWithNames = ['transport' => 'Transport', 'storefront' => 'Storefront'];
+        }
+        
+        // Check for case-insensitive match against both keys and names
+        $matchedType = null;
+        
+        // First try to match against keys
+        foreach ($validTypes as $validKey) {
+            if (strtolower($type) === strtolower($validKey)) {
+                $matchedType = $validKey;
+                break;
+            }
+        }
+        
+        // If no key match, try to match against names
+        if (!$matchedType) {
+            foreach ($validTypesWithNames as $key => $name) {
+                if (strtolower($type) === strtolower($name)) {
+                    $matchedType = $key; // Return the key, not the name
+                    break;
+                }
+            }
+        }
+        
+        if (!$matchedType) {
+            // Create helpful error message with both keys and names
+            $typesList = [];
+            foreach ($validTypesWithNames as $key => $name) {
+                $typesList[] = "{$name} ({$key})";
+            }
+            
+            $result->addError(
+                'type', 
+                "Invalid order type '{$type}'. Valid types: " . implode(', ', $typesList)
+            );
+            $result->addSuggestion(
+                'type',
+                'Try using either the type key or name. Valid options: ' . implode(', ', $typesList)
+            );
+        } else if ($type !== $matchedType) {
+            // Add suggestion to fix case/spacing
+            $result->addWarning(
+                'type',
+                "Order type '{$type}' will be normalized to '{$matchedType}'"
+            );
+            $result->addSuggestion(
+                'type',
+                "Consider using exact case: '{$matchedType}'"
+            );
+        }
+    }
+
+    /**
      * Validate scheduling logic
      * 
      * @param array $data Row data
@@ -1217,6 +1815,68 @@ class OrderImportService
      */
     protected function validateScheduling(array $data, ValidationResult $result, $template = null): void
     {
+        \Log::info("🚀 CLAUDE DEBUG: validateScheduling method called", [
+            'has_scheduled_at' => isset($data['scheduled_at']),
+            'scheduled_value' => $data['scheduled_at'] ?? 'NOT_SET',
+            'template_provided' => $template !== null
+        ]);
+        
+        // First check if we have a scheduled_at field that couldn't be parsed
+        if (isset($data['scheduled_at'])) {
+            // Check if the date field was properly parsed during transformation
+            // If it's still a string that doesn't look like a properly formatted date,
+            // it likely failed custom format parsing
+            $scheduledValue = $data['scheduled_at'];
+            
+            \Log::info("DEBUG: validateScheduling called", [
+                'scheduled_value' => $scheduledValue,
+                'is_string' => is_string($scheduledValue),
+                'matches_parsed_format' => is_string($scheduledValue) ? preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $scheduledValue) : false,
+                'template_provided' => $template !== null
+            ]);
+            
+            // Check if this looks like an unparsed date (not in Y-m-d H:i:s format)
+            if (is_string($scheduledValue) && !preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $scheduledValue)) {
+                // Check if custom date formats were specified in template
+                $fieldSpecificFormats = null;
+                $legacyDateFormats = null;
+                if ($template) {
+                    $fieldSpecificFormats = is_object($template) ? ($template->field_date_formats ?? null) : ($template['field_date_formats'] ?? null);
+                    $legacyDateFormats = is_object($template) ? ($template->date_formats ?? null) : ($template['date_formats'] ?? null);
+                }
+                
+                \Log::warning("DEBUG: Unparsed date detected, checking for custom formats", [
+                    'unparsed_value' => $scheduledValue,
+                    'field_specific_formats' => $fieldSpecificFormats,
+                    'legacy_date_formats' => $legacyDateFormats
+                ]);
+                
+                // Check if any custom formats were specified
+                $customFormats = null;
+                if ($fieldSpecificFormats && isset($fieldSpecificFormats['scheduled_at'])) {
+                    $customFormats = [$fieldSpecificFormats['scheduled_at']];
+                } elseif ($legacyDateFormats && !empty($legacyDateFormats)) {
+                    $customFormats = $legacyDateFormats;
+                }
+                
+                if ($customFormats && !empty($customFormats)) {
+                    // Custom format was specified but parsing failed
+                    $expectedFormat = implode(' or ', $customFormats);
+                    \Log::error("DEBUG: Date format mismatch detected", [
+                        'unparsed_value' => $scheduledValue,
+                        'expected_formats' => $customFormats,
+                        'expected_format_string' => $expectedFormat
+                    ]);
+                    
+                    $result->addError('scheduled_at', "Date format mismatch. Expected format: {$expectedFormat}");
+                    // Use PHP format for generating example date, but show user format in message
+                    $exampleDate = now()->addDay()->format($this->convertUserFormatToPhpFormat($customFormats[0]));
+                    $result->addSuggestion('scheduled_at', "Current value '{$scheduledValue}' doesn't match expected format '{$expectedFormat}'. Example: {$exampleDate}");
+                    return; // Exit early with format error, don't try to parse with Carbon
+                }
+            }
+        }
+        
         try {
             $scheduled = Carbon::parse($data['scheduled_at']);
             $now = now();
@@ -1224,6 +1884,7 @@ class OrderImportService
             // Error if in the past
             if ($scheduled->isPast()) {
                 $result->addError('scheduled_at', 'Scheduled time cannot be in the past');
+                $result->addError('scheduled_at', 'Scheduled time must be in the future');
                 return;
             }
             
@@ -1273,8 +1934,30 @@ class OrderImportService
             }
             
         } catch (\Exception $e) {
-            $result->addError('scheduled_at', 'Invalid date format');
-            $result->addSuggestion('scheduled_at', 'Use format: YYYY-MM-DD HH:MM:SS');
+            // Check if custom date formats were specified for better error message
+            $fieldSpecificFormats = null;
+            $legacyDateFormats = null;
+            if ($template) {
+                $fieldSpecificFormats = is_object($template) ? ($template->field_date_formats ?? null) : ($template['field_date_formats'] ?? null);
+                $legacyDateFormats = is_object($template) ? ($template->date_formats ?? null) : ($template['date_formats'] ?? null);
+            }
+            
+            // Check if any custom formats were specified
+            $customFormats = null;
+            if ($fieldSpecificFormats && isset($fieldSpecificFormats['scheduled_at'])) {
+                $customFormats = [$fieldSpecificFormats['scheduled_at']];
+            } elseif ($legacyDateFormats && !empty($legacyDateFormats)) {
+                $customFormats = $legacyDateFormats;
+            }
+            
+            if ($customFormats && !empty($customFormats)) {
+                $expectedFormat = implode(' or ', $customFormats);
+                $result->addError('scheduled_at', "Date format mismatch. Expected format: {$expectedFormat}");
+                $result->addSuggestion('scheduled_at', "Provide date in format: {$expectedFormat}");
+            } else {
+                $result->addError('scheduled_at', 'Invalid date format');
+                $result->addSuggestion('scheduled_at', 'Use format: YYYY-MM-DD HH:MM:SS');
+            }
         }
     }
 
@@ -1411,13 +2094,28 @@ class OrderImportService
             $mapped = $this->mapFields($row, $template);
             $importRow->mapped_data = $mapped;
             
-            if (empty($mapped) || !isset($mapped['customer_name'])) {
+            if (empty($mapped)) {
                 $importRow->processing_status = ImportRow::STATUS_ERROR;
                 $importRow->error_type = 'mapping_error';
                 $importRow->severity = ImportRow::SEVERITY_CRITICAL;
                 $importRow->validation_errors = ['mapping' => ['Unable to map required fields']];
                 $importRow->is_resolvable = false;
-                $importRow->processing_message = 'Field mapping failed - required fields missing';
+                $importRow->processing_message = 'Field mapping failed - no fields mapped';
+                $importRow->save();
+                return $importRow;
+            }
+            
+            // Check for essential fields (pickup/dropoff addresses or names)
+            $hasPickup = !empty($mapped['pickup_address']) || !empty($mapped['pickup_name']);
+            $hasDropoff = !empty($mapped['dropoff_address']) || !empty($mapped['dropoff_name']);
+            
+            if (!$hasPickup || !$hasDropoff) {
+                $importRow->processing_status = ImportRow::STATUS_ERROR;
+                $importRow->error_type = 'mapping_error';
+                $importRow->severity = ImportRow::SEVERITY_CRITICAL;
+                $importRow->validation_errors = ['mapping' => ['Pickup and dropoff locations are required']];
+                $importRow->is_resolvable = true;
+                $importRow->processing_message = 'Missing required pickup or dropoff location';
                 $importRow->save();
                 return $importRow;
             }
@@ -1526,6 +2224,16 @@ class OrderImportService
         $template = null,
         bool $stopOnError = false
     ): array {
+        \Log::info("DEBUG: processBatchDryRun called", [
+            'template_provided' => $template !== null,
+            'template_type' => is_object($template) ? 'object' : (is_array($template) ? 'array' : gettype($template)),
+            'template_has_date_formats' => $template ? (
+                is_object($template) ? isset($template->date_formats) : isset($template['date_formats'])
+            ) : false,
+            'template_date_formats_value' => $template ? (
+                is_object($template) ? ($template->date_formats ?? 'NOT_SET') : ($template['date_formats'] ?? 'NOT_SET')
+            ) : 'NO_TEMPLATE'
+        ]);
         $results = [];
         $stats = [
             'total' => count($rows),
@@ -1747,7 +2455,7 @@ class OrderImportService
     {
         return [
             'customer' => [
-                'name' => $data['customer_name'] ?? 'Unknown',
+                'name' => $data['customer_name'] ?? 'No Customer',
                 'phone' => $data['customer_phone'] ?? null,
                 'email' => $data['customer_email'] ?? null
             ],
@@ -1768,6 +2476,12 @@ class OrderImportService
                 'notes' => $data['notes'] ?? null,
                 'quantity' => $data['quantity'] ?? null,
                 'weight' => $data['weight'] ?? null
+            ],
+            'driver' => [
+                'name' => $data['driver_name'] ?? null,
+                'email' => $data['driver_email'] ?? null,
+                'phone' => $data['driver_phone'] ?? null,
+                'id' => $data['driver_id'] ?? null
             ]
         ];
     }
@@ -1814,23 +2528,35 @@ class OrderImportService
      */
     protected function determineSessionStatus(array $stats): string
     {
+        // If all rows failed, mark as failed
         if ($stats['errors'] === $stats['total']) {
-            return 'all_failed';
+            return 'failed';
         }
         
+        // If no issues at all, mark as completed cleanly
         if ($stats['errors'] === 0 && $stats['warnings'] === 0) {
-            return 'ready';
+            return 'dry_run_completed';
         }
         
-        if ($stats['errors'] > 0) {
-            return 'has_errors';
+        // Check if there are importable rows despite errors
+        $importableCount = $stats['importable'] ?? ($stats['valid'] + ($stats['warnings'] ?? 0));
+        
+        // If there are errors but also importable rows, allow partial import
+        if ($stats['errors'] > 0 && $importableCount > 0) {
+            return 'has_errors'; // This status now allows import execution
         }
         
+        // If there are errors but no importable rows, it's failed
+        if ($stats['errors'] > 0 && $importableCount === 0) {
+            return 'failed';
+        }
+        
+        // If only warnings exist
         if ($stats['warnings'] > 0) {
             return 'has_warnings';
         }
         
-        return 'ready';
+        return 'dry_run_completed';
     }
 
     /**
@@ -2366,15 +3092,18 @@ class OrderImportService
         DB::beginTransaction();
         
         try {
-            // Step 1: Get or create customer
+            // Step 1: Get or create customer (optional)
             $customer = $this->resolveCustomer($data, $template);
+            
+            // Step 1a: Resolve driver if specified
+            $driver = $this->resolveDriver($data, $template);
             
             // Step 2: Create or get places
             $pickup = $this->resolvePlace($data, 'pickup', $template);
             $dropoff = $this->resolvePlace($data, 'dropoff', $template);
             
             // Step 3: Prepare order data
-            $orderData = $this->prepareOrderData($data, $customer, $pickup, $dropoff, $template);
+            $orderData = $this->prepareOrderData($data, $customer, $pickup, $dropoff, $driver, $template);
             
             // Step 4: Create the order
             $order = Order::create($orderData);
@@ -2401,7 +3130,9 @@ class OrderImportService
             
             Log::info("Order created from import", [
                 'order_id' => $order->public_id,
-                'customer' => $customer->name,
+                'customer' => $customer ? $customer->name : 'No Customer',
+                'driver_assigned' => $driver ? $driver->public_id : null,
+                'driver_name' => $driver ? $driver->name : null,
                 'import_row' => $importRow->row_number
             ]);
             
@@ -2437,8 +3168,28 @@ class OrderImportService
      * @param ImportTemplate|object|array|null $template Import template
      * @return Contact Customer contact instance
      */
-    protected function resolveCustomer(array $data, $template = null): Contact
+    protected function resolveCustomer(array $data, $template = null): ?Contact
     {
+        // Check if any customer fields are provided
+        $hasCustomerInfo = !empty($data['customer_name']) || 
+                          !empty($data['customer_email']) || 
+                          !empty($data['customer_phone']);
+        
+        // Log customer data for debugging
+        \Log::info("Resolving customer", [
+            'customer_name' => $data['customer_name'] ?? null,
+            'customer_email' => $data['customer_email'] ?? null,
+            'customer_phone' => $data['customer_phone'] ?? null,
+            'has_customer_info' => $hasCustomerInfo,
+            'all_data_keys' => array_keys($data)
+        ]);
+        
+        // If no customer information provided, return null (customers are optional)
+        if (!$hasCustomerInfo) {
+            \Log::warning("No customer information found", ['data_keys' => array_keys($data)]);
+            return null;
+        }
+        
         $companyId = session('company');
         if ($template) {
             if (is_object($template)) {
@@ -2508,6 +3259,55 @@ class OrderImportService
     }
 
     /**
+     * Resolve driver from data (find existing driver)
+     * 
+     * @param array $data Normalized order data
+     * @param ImportTemplate|object|array|null $template Import template
+     * @return Driver|null Driver instance or null if not found/specified
+     */
+    protected function resolveDriver(array $data, $template = null): ?Driver
+    {
+        // Check if any driver fields are provided
+        $driverIdentifiers = [
+            $data['driver_name'] ?? null,
+            $data['driver_email'] ?? null, 
+            $data['driver_phone'] ?? null,
+            $data['driver_id'] ?? null
+        ];
+        
+        // If no driver information provided, return null
+        if (empty(array_filter($driverIdentifiers))) {
+            return null;
+        }
+        
+        $driver = null;
+        
+        // Try to find driver by different identifiers in order of preference
+        foreach ($driverIdentifiers as $identifier) {
+            if (!empty($identifier)) {
+                $driver = Driver::findByIdentifier($identifier);
+                if ($driver) {
+                    Log::info("Driver resolved for import", [
+                        'driver_id' => $driver->public_id,
+                        'driver_name' => $driver->name,
+                        'identifier_used' => $identifier
+                    ]);
+                    break;
+                }
+            }
+        }
+        
+        if (!$driver) {
+            Log::warning("Driver not found during import", [
+                'identifiers_tried' => array_filter($driverIdentifiers),
+                'suggestion' => 'Driver must exist in system before assignment'
+            ]);
+        }
+        
+        return $driver;
+    }
+
+    /**
      * Resolve place (pickup or dropoff) from data
      * 
      * @param array $data Normalized order data
@@ -2531,9 +3331,32 @@ class OrderImportService
         $nameField = "{$type}_name";
         
         $address = $data[$addressField] ?? null;
+        $name = $data[$nameField] ?? null;
         
-        if (empty($address)) {
-            throw new \Exception("Missing {$type} address");
+        // Require either address OR name for place creation
+        if (empty($address) && empty($name)) {
+            throw new \Exception("Missing {$type} address or name");
+        }
+        
+        // Check if place exists by name first (for existing place lookup)
+        if (!empty($name)) {
+            $existingByName = Place::where('company_uuid', $companyId)
+                ->where('name', $name)
+                ->first();
+            
+            if ($existingByName) {
+                \Log::debug("Found existing place by name", [
+                    'place_name' => $name,
+                    'place_id' => $existingByName->public_id,
+                    'address' => $existingByName->street1
+                ]);
+                return $existingByName;
+            }
+        }
+        
+        // If we only have a name (no address), create place using name as address
+        if (empty($address) && !empty($name)) {
+            $address = $name; // Use name as address for place creation
         }
         
         // Check if place exists (by exact address match)
@@ -2573,17 +3396,19 @@ class OrderImportService
      * Prepare order data for creation
      * 
      * @param array $data Normalized order data
-     * @param Contact $customer Customer instance
+     * @param Contact|null $customer Customer instance (optional)
      * @param Place $pickup Pickup place
      * @param Place $dropoff Dropoff place
+     * @param Driver|null $driver Driver instance (optional)
      * @param ImportTemplate|object|array|null $template Import template
      * @return array Order data ready for creation
      */
     protected function prepareOrderData(
         array $data,
-        $customer,
+        ?Contact $customer,
         $pickup,
         $dropoff,
+        ?Driver $driver = null,
         $template = null
     ): array {
         $companyId = session('company');
@@ -2597,11 +3422,12 @@ class OrderImportService
         
         $orderData = [
             'company_uuid' => $companyId,
-            'customer_uuid' => $customer->uuid,
-            'customer_type' => 'contact',
+            'customer_uuid' => $customer?->uuid,
+            'customer_type' => $customer ? 'contact' : null,
+            'driver_assigned_uuid' => $driver?->uuid,
             'adhoc' => true,
             'status' => 'created',
-            'type' => 'delivery',
+            'type' => $data['type'] ?? 'delivery',
             'scheduled_at' => $data['scheduled_at'] ?? null,
             'notes' => $data['notes'] ?? null,
             'internal_id' => $data['reference'] ?? null,
@@ -2610,7 +3436,12 @@ class OrderImportService
                 'imported' => true,
                 'import_source' => $data['import_source'] ?? 'csv',
                 'imported_at' => now()->toDateTimeString(),
-                'original_reference' => $data['reference'] ?? null
+                'original_reference' => $data['reference'] ?? null,
+                'driver_assigned' => $driver ? [
+                    'id' => $driver->public_id,
+                    'name' => $driver->name,
+                    'phone' => $driver->phone
+                ] : null
             ]
         ];
         
@@ -2861,6 +3692,85 @@ class OrderImportService
             ->count();
         
         return $lastOrder + 1;
+    }
+    
+    /**
+     * Filter data for validation - remove empty values that shouldn't be validated
+     * 
+     * @param array $data Raw mapped data
+     * @return array Filtered data for validation
+     */
+    protected function filterDataForValidation(array $data): array
+    {
+        $filtered = [];
+        
+        foreach ($data as $key => $value) {
+            // Include the field only if it has a meaningful value
+            // This prevents nullable fields from being validated against length constraints
+            // when they are empty or null
+            if ($value !== null && $value !== '') {
+                $filtered[$key] = $value;
+            }
+        }
+        
+        return $filtered;
+    }
+    
+    /**
+     * Validate location requirements (pickup/dropoff)
+     * 
+     * @param array $data Row data
+     * @param ValidationResult $result Validation result
+     */
+    protected function validateLocationRequirements(array $data, ValidationResult $result): void
+    {
+        \Log::debug("validateLocationRequirements called", [
+            'data_keys' => array_keys($data),
+            'pickup_name' => $data['pickup_name'] ?? 'NOT_SET',
+            'pickup_address' => $data['pickup_address'] ?? 'NOT_SET',
+            'dropoff_name' => $data['dropoff_name'] ?? 'NOT_SET', 
+            'dropoff_address' => $data['dropoff_address'] ?? 'NOT_SET'
+        ]);
+        
+        // Check if pickup requirements are met
+        $hasPickupName = !empty($data['pickup_name']);
+        $hasValidPickupAddress = !empty($data['pickup_address']) && strlen(trim($data['pickup_address'])) >= 10;
+        $hasShortPickupAddress = !empty($data['pickup_address']) && strlen(trim($data['pickup_address'])) < 10;
+        
+        // Priority: If we have pickup_name, we're good
+        // If no pickup_name, check pickup_address
+        if ($hasPickupName) {
+            // All good, pickup_name is sufficient
+        } elseif ($hasValidPickupAddress) {
+            // All good, pickup_address is sufficient
+        } elseif ($hasShortPickupAddress) {
+            // Address provided but too short
+            $result->addError('pickup_address', 'Pickup address must be at least 10 characters');
+            $result->addSuggestion('pickup_address', 'Provide a complete address or use the Pickup Name/ID field instead');
+        } else {
+            // No pickup info at all
+            $result->addError('pickup', 'Either Pickup Name/ID or Pickup Address (minimum 10 characters) is required');
+            $result->addSuggestion('pickup', 'Provide either a pickup location name/ID or a full address with at least 10 characters');
+        }
+        
+        // Check if dropoff requirements are met
+        $hasDropoffName = !empty($data['dropoff_name']);
+        $hasValidDropoffAddress = !empty($data['dropoff_address']) && strlen(trim($data['dropoff_address'])) >= 10;
+        $hasShortDropoffAddress = !empty($data['dropoff_address']) && strlen(trim($data['dropoff_address'])) < 10;
+        
+        if ($hasDropoffName) {
+            // All good, dropoff_name is sufficient
+        } elseif ($hasValidDropoffAddress) {
+            // All good, dropoff_address is sufficient
+        } elseif ($hasShortDropoffAddress) {
+            // Address provided but too short
+            $result->addError('dropoff_address', 'Dropoff address must be at least 10 characters');
+            $result->addSuggestion('dropoff_address', 'Provide a complete address or use the Dropoff Name/ID field instead');
+        } else {
+            // No dropoff info at all
+            $result->addError('dropoff', 'Either Dropoff Name/ID or Dropoff Address (minimum 10 characters) is required');
+            $result->addSuggestion('dropoff', 'Provide either a dropoff location name/ID or a full address with at least 10 characters');
+        }
     }
 
     /**
@@ -3132,8 +4042,21 @@ class OrderImportService
             $normalized['customer_email'] = $this->normalizeEmail($normalized['customer_email']);
         }
         
+        // Normalize order type (case-insensitive matching)
+        if (isset($normalized['type'])) {
+            $normalized['type'] = $this->normalizeOrderType($normalized['type']);
+        }
+        
+        // Normalize driver fields
+        if (isset($normalized['driver_phone'])) {
+            $normalized['driver_phone'] = $this->normalizePhoneNumber($normalized['driver_phone']);
+        }
+        if (isset($normalized['driver_email'])) {
+            $normalized['driver_email'] = $this->normalizeEmail($normalized['driver_email']);
+        }
+        
         // Normalize names
-        foreach (['customer_name', 'pickup_name', 'dropoff_name'] as $field) {
+        foreach (['customer_name', 'pickup_name', 'dropoff_name', 'driver_name'] as $field) {
             if (isset($normalized[$field])) {
                 $normalized[$field] = $this->normalizeName($normalized[$field]);
             }
@@ -3582,6 +4505,61 @@ class OrderImportService
         }
         
         return null;
+    }
+
+    /**
+     * Normalize order type with case-insensitive matching and trimming
+     * 
+     * @param string $type Order type value
+     * @return string Normalized order type
+     */
+    protected function normalizeOrderType(string $type): string
+    {
+        $type = trim($type);
+        
+        if (empty($type)) {
+            return 'transport'; // Default fallback
+        }
+        
+        // Get valid order types with names
+        $validTypesWithNames = $this->getValidOrderTypesWithNames();
+        $validTypes = array_keys($validTypesWithNames);
+        
+        if (empty($validTypes)) {
+            $validTypes = ['transport', 'storefront'];
+            $validTypesWithNames = ['transport' => 'Transport', 'storefront' => 'Storefront'];
+        }
+        
+        // Find case-insensitive match against keys first
+        foreach ($validTypes as $validKey) {
+            if (strtolower($type) === strtolower($validKey)) {
+                return $validKey; // Return the correctly cased key
+            }
+        }
+        
+        // If no key match, try matching against names
+        foreach ($validTypesWithNames as $key => $name) {
+            if (strtolower($type) === strtolower($name)) {
+                return $key; // Return the key corresponding to the matched name
+            }
+        }
+        
+        // If no match found, return the trimmed original (will fail validation later)
+        return $type;
+    }
+
+    /**
+     * Filter validation rules to only apply to fields that are actually mapped
+     * This prevents validation errors on unmapped fields
+     * 
+     * @param array $rules Base validation rules
+     * @return array Filtered validation rules
+     */
+    protected function filterRulesForMappedFields(array $rules): array
+    {
+        // For now, return all rules but this method can be enhanced
+        // to dynamically filter based on mapped fields from session context
+        return $rules;
     }
 
     /**

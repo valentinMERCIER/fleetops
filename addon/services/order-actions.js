@@ -23,7 +23,10 @@ export default class OrderActionsService extends ResourceActionService {
         view: (order) => this.transitionTo('operations.orders.index.details', order),
         edit: (order) => this.transitionTo('operations.orders.index.edit', order),
         create: () => this.transitionTo('operations.orders.index.new'),
-        import: () => this.orderImport.promptBulkImport({ onSuccess: this.refresh }),
+        import: () => this.orderImport.promptBulkImport({ onSuccess: () => {
+            console.log('🔄 OrderActions: Import success callback triggered');
+            return this.refresh();
+        }}),
     };
 
     panel = {

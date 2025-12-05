@@ -1,43 +1,40 @@
 import Component from '@glimmer/component';
 import { tracked } from '@glimmer/tracking';
 import { action } from '@ember/object';
+import { inject as service } from '@ember/service';
+import { task } from 'ember-concurrency';
 
 export default class OrderImportScheduledListComponent extends Component {
-    @tracked scheduledImports = [
-        {
-            id: 1,
-            name: 'wednesday imports',
-            schedule: 'Once 11-26-2025 at 11:00 PM (GMT+01:00)'
-        },
-        {
-            id: 2,
-            name: 'wednesday imports 2',
-            schedule: 'Once 11-26-2025 at 11:00 PM (GMT+01:00)'
-        },
-        {
-            id: 3,
-            name: 'wednesday imports 3',
-            schedule: 'Once 11-26-2025 at 11:00 PM (GMT+01:00)'
-        },
-    ];
+    @service scheduledImport;
+    @service notifications;
 
-    @tracked completedImports = [
-        {
-            id: 4,
-            name: 'test',
-            schedule: 'Yearly at 10:00 PM (GMT+01:00)'
-        },
-        {
-            id: 5,
-            name: 'test 2',
-            schedule: 'Yearly at 10:00 PM (GMT+01:00)'
-        },
-        {
-            id: 6,
-            name: 'test 3',
-            schedule: 'Yearly at 10:00 PM (GMT+01:00)'
-        },
-    ];
+    @tracked scheduledImports = [];
+    @tracked completedImports = [];
+    @tracked isLoading = false;
+
+    constructor() {
+        super(...arguments);
+        this.loadData.perform();
+    }
+
+    @task
+    *loadData() {
+        this.isLoading = true;
+        try {
+            // Fetch active scheduled imports
+            const scheduled = yield this.scheduledImport.query({ status: 'active' });
+            this.scheduledImports = scheduled;
+
+            // Fetch completed/inactive scheduled imports (optional, depending on requirements)
+            // For now, we'll just put everything else in completed or separate query
+            // const completed = yield this.scheduledImport.query({ status: 'completed' });
+            // this.completedImports = completed;
+        } catch (error) {
+            this.notifications.serverError(error);
+        } finally {
+            this.isLoading = false;
+        }
+    }
 
     lastItemToDelete = null;
 
@@ -46,17 +43,17 @@ export default class OrderImportScheduledListComponent extends Component {
         // Check if itemToDelete has changed and we have an item to delete
         if (this.args.itemToDelete && this.args.itemToDelete !== this.lastItemToDelete) {
             this.lastItemToDelete = this.args.itemToDelete;
-            // Perform the deletion
+            // Perform the deletion from the list (API call is done in parent)
             this.deleteImport(this.args.itemToDelete);
         }
     }
 
     @action
     deleteImport(importItem) {
-        // Remove from scheduled imports using object reference equality
-        this.scheduledImports = this.scheduledImports.filter(item => item !== importItem);
-        // Remove from completed imports using object reference equality
-        this.completedImports = this.completedImports.filter(item => item !== importItem);
+        // Remove from scheduled imports using object reference equality or ID match
+        this.scheduledImports = this.scheduledImports.filter(item => item.public_id !== importItem.public_id);
+        // Remove from completed imports
+        this.completedImports = this.completedImports.filter(item => item.public_id !== importItem.public_id);
 
         // Call the parent onDelete callback if provided
         if (this.args.onDelete) {

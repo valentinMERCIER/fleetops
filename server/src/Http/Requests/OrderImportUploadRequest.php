@@ -49,7 +49,7 @@ class OrderImportUploadRequest extends FormRequest
             'file' => [
                 'required',
                 'file',
-                'mimes:csv,xlsx,xls,json',
+                'mimes:csv,xlsx,xls,json,txt',
                 'max:10240' // 10MB max
             ],
             'name' => 'nullable|string|max:255',

@@ -15,6 +15,11 @@ export default class OrderImportService extends Service {
     @tracked uploadedFiles = [];
 
     @action promptBulkImport(options = {}) {
+        console.log('🔄 OrderImport: promptBulkImport called with options:', {
+            hasOnSuccess: !!options.onSuccess,
+            options: options
+        });
+        
         return this.modalsManager.show('modals/order-bulk-import', {
             modalClass: 'modal-lg',
             ...options,

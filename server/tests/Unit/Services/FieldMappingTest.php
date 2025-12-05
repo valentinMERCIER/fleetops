@@ -323,4 +323,72 @@ class FieldMappingTest extends TestCase
             $this->assertEquals($expected, $result, "Failed to normalize address: $input");
         }
     }
+
+    public function test_handles_generic_customer_field_mapping(): void
+    {
+        // Test the specific issue: {"customer":"Customer"} should map to customer_name
+        $template = (object) [
+            'field_mappings' => [
+                'customer' => 'Customer'  // This is the user's mapping
+            ]
+        ];
+        
+        $row = [
+            'Type' => 'Transport',
+            'Customer' => 'test customer',
+            'Pick Up' => 'Pickup Location',
+            'Drop Off' => 'Dropoff Location'
+        ];
+        
+        $result = $this->service->mapFields($row, $template);
+        
+        // The generic "customer" field should be automatically mapped to "customer_name"
+        $this->assertArrayHasKey('customer_name', $result, 'Generic "customer" field should be mapped to "customer_name"');
+        $this->assertEquals('test customer', $result['customer_name']);
+        
+        // Should not have the generic "customer" field in the result
+        $this->assertArrayNotHasKey('customer', $result, 'Generic "customer" field should be converted, not kept');
+    }
+    
+    public function test_customer_field_mapping_with_existing_customer_fields(): void
+    {
+        // Test that generic "customer" field is only converted when no specific customer fields exist
+        $template = (object) [
+            'field_mappings' => [
+                'customer' => 'Customer',
+                'customer_email' => 'Email'
+            ]
+        ];
+        
+        $row = [
+            'Customer' => 'test customer',
+            'Email' => 'test@example.com'
+        ];
+        
+        $result = $this->service->mapFields($row, $template);
+        
+        // Since customer_email exists, the generic "customer" should still be converted to customer_name
+        $this->assertArrayHasKey('customer_name', $result);
+        $this->assertEquals('test customer', $result['customer_name']);
+        $this->assertArrayHasKey('customer_email', $result);
+        $this->assertEquals('test@example.com', $result['customer_email']);
+    }
+    
+    public function test_auto_detection_maps_customer_to_customer_name(): void
+    {
+        // Test auto-detection for "Customer" header
+        $row = [
+            'Type' => 'Transport',
+            'Customer' => 'val test',
+            'Pickup Name' => 'Pick Up Location',
+            'Dropoff Name' => 'Drop Off Location'
+        ];
+        
+        $result = $this->service->mapFields($row);  // No template = auto-detection
+        
+        // Auto-detection should map "Customer" to "customer_name" automatically
+        $this->assertArrayHasKey('customer_name', $result);
+        $this->assertEquals('val test', $result['customer_name']);
+        $this->assertTrue($result['_import_metadata']['auto_detected']);
+    }
 }

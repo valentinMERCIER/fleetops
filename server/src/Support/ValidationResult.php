@@ -64,6 +64,34 @@ class ValidationResult
     }
 
     /**
+     * Remove errors for a specific field
+     * 
+     * @param string $field Field name
+     * @return self
+     */
+    public function removeError(string $field): self
+    {
+        if (isset($this->errors[$field])) {
+            unset($this->errors[$field]);
+            
+            // Update valid status
+            $this->valid = empty($this->errors);
+        }
+        return $this;
+    }
+
+    /**
+     * Check if has error for specific field
+     * 
+     * @param string $field Field name
+     * @return bool
+     */
+    public function hasError(string $field): bool
+    {
+        return isset($this->errors[$field]) && !empty($this->errors[$field]);
+    }
+
+    /**
      * Add a warning
      * 
      * @param string $field Field name

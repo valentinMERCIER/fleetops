@@ -11,6 +11,21 @@ export default class OperationsOrdersIndexController extends Controller {
     @service orderListOverlay;
     @service fetch;
     @service intl;
+    @service universe;
+    @service hostRouter;
+
+    constructor() {
+        super(...arguments);
+        
+        // Listen for manual refresh events from import modal
+        this.universe.on('orders.refresh', () => {
+            console.log('📡 OrdersController: Received manual refresh event');
+            this.orderActions.refresh();
+        });
+        
+        // Setup socket events with automatic table refresh
+        this.setupSocketEventsWithRefresh();
+    }
 
     /** query params */
     @tracked queryParams = [
@@ -419,10 +434,6 @@ export default class OperationsOrdersIndexController extends Controller {
         ];
     }
 
-    constructor() {
-        super(...arguments);
-        this.setupSocketEventsWithRefresh();
-    }
 
     /**
      * Setup company socket events with automatic table refresh
@@ -517,6 +528,9 @@ export default class OperationsOrdersIndexController extends Controller {
         if (this._refreshTimeout) {
             clearTimeout(this._refreshTimeout);
         }
+        
+        // Remove universe event listeners
+        this.universe.off('orders.refresh');
     }
 
     @action changeLayout(mode) {

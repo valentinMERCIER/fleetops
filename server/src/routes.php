@@ -335,6 +335,15 @@ Route::prefix(config('fleetops.api.routing.prefix', null))->namespace('Fleetbase
                             // Row operations
                             $router->post('{id}/rows/{rowId}/fix', 'OrderImportController@fixRow');
                         });
+
+                        // Scheduled Imports Routes
+                        $router->group(['prefix' => 'orders/scheduled-imports'], function ($router) {
+                            $router->get('/', 'ScheduledImportController@index');
+                            $router->post('/', 'ScheduledImportController@store');
+                            $router->get('{id}', 'ScheduledImportController@show');
+                            $router->put('{id}', 'ScheduledImportController@update');
+                            $router->delete('{id}', 'ScheduledImportController@destroy');
+                        });
                         
                         $router->fleetbaseRoutes(
                             'orders',

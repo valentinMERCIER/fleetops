@@ -47,7 +47,19 @@ class OrderImportDryRunRequest extends FormRequest
             'default_values' => 'nullable|array',
             'duplicate_handling' => 'nullable|in:allow,warn,reject',
             'duplicate_check_fields' => 'nullable|array',
-            'stop_on_error' => 'nullable|boolean'
+            'stop_on_error' => 'nullable|boolean',
+            
+            // Backward compatibility: single date format for all date fields
+            'date_format' => 'nullable|string',
+            
+            // Field-specific date formats (new API design)
+            'scheduled_at_format' => 'nullable|string',
+            'created_at_format' => 'nullable|string',
+            'updated_at_format' => 'nullable|string',
+            'delivery_date_format' => 'nullable|string',
+            'pickup_date_format' => 'nullable|string',
+            'expected_at_format' => 'nullable|string',
+            'completed_at_format' => 'nullable|string'
         ];
     }
 
@@ -79,7 +91,15 @@ class OrderImportDryRunRequest extends FormRequest
             'default_values' => 'default values',
             'duplicate_handling' => 'duplicate handling strategy',
             'duplicate_check_fields' => 'duplicate check fields',
-            'stop_on_error' => 'stop on error option'
+            'stop_on_error' => 'stop on error option',
+            'date_format' => 'date format',
+            'scheduled_at_format' => 'scheduled at date format',
+            'created_at_format' => 'created at date format',
+            'updated_at_format' => 'updated at date format',
+            'delivery_date_format' => 'delivery date format',
+            'pickup_date_format' => 'pickup date format',
+            'expected_at_format' => 'expected at date format',
+            'completed_at_format' => 'completed at date format'
         ];
     }
 }

@@ -204,7 +204,7 @@ export default class ModalsOrderBulkImportComponent extends Component {
     }
 
     // Generate live preview of date format for a specific field (safe getter without side effects)
-    getDateFormatPreview(fieldKey) {
+    getDateFormatPreview = (fieldKey) => {
         const dateFormat = this.fieldDateFormats[fieldKey];
         if (!dateFormat) {
             return '';
@@ -220,7 +220,7 @@ export default class ModalsOrderBulkImportComponent extends Component {
     }
 
     // Check if format is valid for a specific field
-    isDateFormatValid(fieldKey) {
+    isDateFormatValid = (fieldKey) => {
         const dateFormat = this.fieldDateFormats[fieldKey];
         if (!dateFormat) {
             return false;
@@ -263,9 +263,9 @@ export default class ModalsOrderBulkImportComponent extends Component {
     }
     
     // Helper to check if a field is a date field
-    isDateField(fieldKey) {
+    isDateField = (fieldKey) => {
         return this.dateFields.some(dateField => dateField.key === fieldKey);
-    }
+    };
 
     @tracked importSession = null;
 
@@ -330,6 +330,14 @@ export default class ModalsOrderBulkImportComponent extends Component {
                             h.toLowerCase() === field.key.toLowerCase() ||
                             h.toLowerCase() === field.label.toLowerCase()
                         );
+
+                        // Set default date format for auto-mapped date fields
+                        if (match && this.isDateField(field.key)) {
+                            this.fieldDateFormats = {
+                                ...this.fieldDateFormats,
+                                [field.key]: 'yyyy-MM-dd HH:mm:ss' // Default to ISO-like format
+                            };
+                        }
 
                         return {
                             ...field,
@@ -577,7 +585,32 @@ export default class ModalsOrderBulkImportComponent extends Component {
 
     @action
     updateMapping(map, event) {
-        set(map, 'selectedColumn', event.target.value);
+        const oldValue = map.selectedColumn;
+        const newValue = event.target.value;
+        
+        set(map, 'selectedColumn', newValue);
+        
+        // Set default date format for date fields when they are first mapped
+        if (newValue && !oldValue && this.isDateField(map.key)) {
+            // Only set default if no format is already set for this field
+            if (!this.fieldDateFormats[map.key]) {
+                this.fieldDateFormats = {
+                    ...this.fieldDateFormats,
+                    [map.key]: 'yyyy-MM-dd HH:mm:ss' // Default to ISO-like format
+                };
+            }
+        }
+        
+        // Clear date format when field is unmapped
+        if (!newValue && oldValue && this.isDateField(map.key)) {
+            const { [map.key]: removed, ...remainingFormats } = this.fieldDateFormats;
+            this.fieldDateFormats = remainingFormats;
+            
+            // Also clear any errors for this field
+            const { [map.key]: removedError, ...remainingErrors } = this.fieldDateFormatErrors;
+            this.fieldDateFormatErrors = remainingErrors;
+        }
+        
         // Increment version counter to trigger getter recomputation
         this._mappingsVersion++;
     }

@@ -13,7 +13,7 @@ import getRoutingHost from '@fleetbase/ember-core/utils/get-routing-host';
 import setupCustomerPortal from './utils/setup-customer-portal';
 
 const { modulePrefix } = config;
-const externalRoutes = ['console', 'extensions'];
+const externalRoutes = ['console', 'extensions', 'console.fleet-ops'];
 
 export default class FleetOpsEngine extends Engine {
     modulePrefix = modulePrefix;
