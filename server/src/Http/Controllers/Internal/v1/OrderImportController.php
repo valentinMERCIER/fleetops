@@ -238,6 +238,13 @@ class OrderImportController extends Controller
      */
     public function dryRun(OrderImportDryRunRequest $request, string $id): JsonResponse
     {
+        \Log::info("🚀 CLAUDE DEBUG: dryRun method called", [
+            'session_id' => $id,
+            'has_date_format' => $request->has('date_format'),
+            'date_format_value' => $request->input('date_format'),
+            'all_params' => $request->all()
+        ]);
+        
         // Validation handled by FormRequest
         
         $session = ImportSession::where('public_id', $id)
@@ -254,8 +261,48 @@ class OrderImportController extends Controller
                 'field_mappings' => $request->input('mappings'),
                 'validation_rules' => $request->input('validation_rules', []),
                 'default_values' => $request->input('default_values', []),
-                'duplicate_handling' => $request->input('duplicate_handling', 'warn')
+                'duplicate_handling' => $request->input('duplicate_handling', 'warn'),
+                'company_uuid' => session('company')
             ];
+            
+            // Handle date formats (both legacy and field-specific)
+            $fieldSpecificFormats = $this->extractFieldSpecificDateFormats($request);
+            $legacyDateFormat = $request->input('date_format');
+            
+            \Log::debug("DEBUG: Dry run date format processing", [
+                'has_legacy_date_format' => $request->has('date_format'),
+                'legacy_date_format_value' => $legacyDateFormat,
+                'field_specific_formats' => $fieldSpecificFormats,
+                'request_all' => $request->all()
+            ]);
+            
+            // Prioritize field-specific formats, fall back to legacy format
+            if (!empty($fieldSpecificFormats)) {
+                $template['field_date_formats'] = $fieldSpecificFormats;
+                \Log::info("DEBUG: Added field-specific date formats to template", [
+                    'field_date_formats' => $fieldSpecificFormats
+                ]);
+            } elseif ($request->has('date_format') && !empty($legacyDateFormat)) {
+                // Backward compatibility: apply legacy format to all date fields
+                $template['date_formats'] = [$legacyDateFormat];
+                \Log::info("DEBUG: Added legacy date format to template for backward compatibility", [
+                    'date_format' => $legacyDateFormat,
+                    'template_date_formats' => $template['date_formats']
+                ]);
+            } else {
+                \Log::warning("DEBUG: No date format provided", [
+                    'has_legacy_parameter' => $request->has('date_format'),
+                    'legacy_parameter_value' => $legacyDateFormat,
+                    'field_specific_count' => count($fieldSpecificFormats)
+                ]);
+            }
+            
+            \Log::debug("Created template from mappings", [
+                'template' => $template,
+                'mappings_from_request' => $request->input('mappings'),
+                'date_format_provided' => $legacyDateFormat,
+                'final_template_date_formats' => $template['date_formats'] ?? 'NOT_SET'
+            ]);
         }
         
         // Update session with configuration
@@ -267,10 +314,21 @@ class OrderImportController extends Controller
         try {
             // Get parsed data from storage
             $filePath = storage_path('app/' . $session->file_path);
+            
+            // Verify file exists
+            if (!file_exists($filePath)) {
+                throw new \Exception("Import file not found at: {$filePath}");
+            }
+            
             $file = new \Illuminate\Http\UploadedFile($filePath, $session->file_name, null, null, true);
             $parsed = $this->importService->parseFile($file);
             
             // Process dry run
+            \Log::debug("Calling processBatchDryRun", [
+                'template_passed' => $template,
+                'session_id' => $session->public_id
+            ]);
+            
             $results = $this->importService->processBatchDryRun(
                 $parsed['rows'],
                 $session,
@@ -372,7 +430,7 @@ class OrderImportController extends Controller
             ->firstOrFail();
         
         // Verify session is ready for import
-        if (!in_array($session->status, ['ready', 'dry_run_completed', 'processed', 'has_warnings'])) {
+        if (!in_array($session->status, ['ready', 'dry_run_completed', 'processed', 'has_warnings', 'has_errors'])) {
             return response()->json([
                 'success' => false,
                 'message' => 'Session is not ready for import. Please run dry-run first.'
@@ -385,9 +443,12 @@ class OrderImportController extends Controller
             ->count();
         
         if ($importableCount === 0) {
+            $totalRows = ImportRow::where('session_uuid', $session->uuid)->count();
+            $errorRows = ImportRow::where('session_uuid', $session->uuid)->withErrors()->count();
+            
             return response()->json([
                 'success' => false,
-                'message' => 'No valid rows to import'
+                'message' => "No valid rows to import. {$errorRows} of {$totalRows} rows have validation errors."
             ], 422);
         }
         
@@ -408,14 +469,24 @@ class OrderImportController extends Controller
                 ['stop_on_error' => $request->boolean('stop_on_error', false)]
             );
             
+            // Determine if this was a partial import
+            $totalRows = ImportRow::where('session_uuid', $session->uuid)->count();
+            $isPartialImport = $results['created'] < $totalRows;
+            
+            $message = $isPartialImport 
+                ? "Partial import completed. Created {$results['created']} orders from {$totalRows} rows."
+                : "Import completed. Created {$results['created']} orders.";
+            
             return response()->json([
                 'success' => $results['success'],
-                'message' => "Import completed. Created {$results['created']} orders.",
+                'message' => $message,
                 'data' => [
                     'session_id' => $session->public_id,
                     'created' => $results['created'],
                     'failed' => $results['failed'],
                     'errors' => $results['errors'],
+                    'is_partial_import' => $isPartialImport,
+                    'total_rows' => $totalRows,
                     'orders' => $request->boolean('include_orders', false) 
                         ? $results['orders'] 
                         : null
@@ -717,6 +788,41 @@ class OrderImportController extends Controller
     }
     
     // Helper methods
+    
+    /**
+     * Extract field-specific date formats from request
+     * 
+     * @param Request $request
+     * @return array Field name => format mappings
+     */
+    protected function extractFieldSpecificDateFormats($request): array
+    {
+        $fieldSpecificFormats = [];
+        
+        // List of supported date field format parameters
+        $dateFormatFields = [
+            'scheduled_at_format' => 'scheduled_at',
+            'created_at_format' => 'created_at',
+            'updated_at_format' => 'updated_at', 
+            'delivery_date_format' => 'delivery_date',
+            'pickup_date_format' => 'pickup_date',
+            'expected_at_format' => 'expected_at',
+            'completed_at_format' => 'completed_at'
+        ];
+        
+        foreach ($dateFormatFields as $formatParam => $fieldName) {
+            if ($request->has($formatParam) && !empty($request->input($formatParam))) {
+                $fieldSpecificFormats[$fieldName] = $request->input($formatParam);
+            }
+        }
+        
+        \Log::debug("Extracted field-specific date formats", [
+            'format_parameters_checked' => array_keys($dateFormatFields),
+            'extracted_formats' => $fieldSpecificFormats
+        ]);
+        
+        return $fieldSpecificFormats;
+    }
     
     protected function getRequiredFields(): array
     {

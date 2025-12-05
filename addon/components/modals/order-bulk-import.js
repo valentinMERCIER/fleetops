@@ -34,8 +34,8 @@ export default class ModalsOrderBulkImportComponent extends Component {
             args: this.args
         });
     }
-    @tracked dateFormat = 'yyyy-MM-dd HH:mm:ss'; // Default date format
-    @tracked dateFormatError = null; // Track date format validation errors
+    @tracked fieldDateFormats = {}; // Track date formats per field
+    @tracked fieldDateFormatErrors = {}; // Track date format validation errors per field
 
     get title() {
         if (this.isAutoImporting) {
@@ -203,51 +203,68 @@ export default class ModalsOrderBulkImportComponent extends Component {
         ];
     }
 
-    // Generate live preview of date format (safe getter without side effects)
-    get dateFormatPreview() {
-        if (!this.dateFormat) {
+    // Generate live preview of date format for a specific field (safe getter without side effects)
+    getDateFormatPreview(fieldKey) {
+        const dateFormat = this.fieldDateFormats[fieldKey];
+        if (!dateFormat) {
             return '';
         }
 
         try {
             // Use a sample date for preview
             const sampleDate = new Date(2024, 0, 15, 14, 30, 0); // January 15, 2024 14:30:00
-            return format(sampleDate, this.dateFormat);
+            return format(sampleDate, dateFormat);
         } catch (error) {
             return 'Invalid format';
         }
     }
 
-    // Separate getter for checking if format is valid
-    get isDateFormatValid() {
-        if (!this.dateFormat) {
+    // Check if format is valid for a specific field
+    isDateFormatValid(fieldKey) {
+        const dateFormat = this.fieldDateFormats[fieldKey];
+        if (!dateFormat) {
             return false;
         }
 
         try {
             const sampleDate = new Date(2024, 0, 15, 14, 30, 0);
-            format(sampleDate, this.dateFormat);
+            format(sampleDate, dateFormat);
             return true;
         } catch (error) {
             return false;
         }
     }
 
-    // Check if scheduled_at field is mapped to a column
-    get isScheduledAtMapped() {
+    // Check if a date field is mapped to a column
+    isDateFieldMapped(fieldKey) {
         this._mappingsVersion; // eslint-disable-line no-unused-expressions
         
         if (!this.mappings) return false;
         
         for (const group of this.mappings) {
-            const scheduledAtField = group.fields.find(f => f.key === 'scheduled_at');
-            if (scheduledAtField && scheduledAtField.selectedColumn && scheduledAtField.selectedColumn.trim() !== '') {
-                console.log('📅 Date format field should be visible - scheduled_at is mapped to:', scheduledAtField.selectedColumn);
+            const dateField = group.fields.find(f => f.key === fieldKey);
+            if (dateField && dateField.selectedColumn && dateField.selectedColumn.trim() !== '') {
+                console.log(`📅 Date format field should be visible - ${fieldKey} is mapped to:`, dateField.selectedColumn);
                 return true;
             }
         }
-        console.log('📅 Date format field should be hidden - scheduled_at is not mapped');
+        console.log(`📅 Date format field should be hidden - ${fieldKey} is not mapped`);
         return false;
+    }
+
+    // Get list of date fields that need format inputs
+    get dateFields() {
+        return [
+            { key: 'scheduled_at', label: 'Scheduled At' },
+            // Add more date fields here as needed
+            // { key: 'created_at', label: 'Created At' },
+            // { key: 'updated_at', label: 'Updated At' },
+        ];
+    }
+    
+    // Helper to check if a field is a date field
+    isDateField(fieldKey) {
+        return this.dateFields.some(dateField => dateField.key === fieldKey);
     }
 
     @tracked importSession = null;
@@ -438,6 +455,8 @@ export default class ModalsOrderBulkImportComponent extends Component {
         this.mappings = [];
         this.importResult = null;
         this.isAutoImporting = false;
+        this.fieldDateFormats = {};
+        this.fieldDateFormatErrors = {};
     }
 
     @action
@@ -476,11 +495,15 @@ export default class ModalsOrderBulkImportComponent extends Component {
                 });
             });
 
-            // Prepare data for API including date format if scheduled_at is mapped
+            // Prepare data for API including field-specific date formats
             const requestData = { mappings };
-            if (this.isScheduledAtMapped && this.dateFormat) {
-                requestData.date_format = this.dateFormat;
-            }
+            
+            // Add field-specific date formats for mapped date fields
+            this.dateFields.forEach(dateField => {
+                if (this.isDateFieldMapped(dateField.key) && this.fieldDateFormats[dateField.key]) {
+                    requestData[`${dateField.key}_format`] = this.fieldDateFormats[dateField.key];
+                }
+            });
 
             // Call dry run endpoint
             const response = yield this.fetch.post(`orders/import-sessions/${sessionId}/dry-run`, requestData);
@@ -560,34 +583,56 @@ export default class ModalsOrderBulkImportComponent extends Component {
     }
 
     @action
-    updateDateFormat(event) {
-        this.dateFormat = event.target.value;
+    updateDateFormat(fieldKey, event) {
+        this.fieldDateFormats = {
+            ...this.fieldDateFormats,
+            [fieldKey]: event.target.value
+        };
         // Clear error when user starts typing
-        this.dateFormatError = null;
-        this.validateDateFormat();
+        this.fieldDateFormatErrors = {
+            ...this.fieldDateFormatErrors,
+            [fieldKey]: null
+        };
+        this.validateDateFormat(fieldKey);
     }
 
     @action
-    validateDateFormat() {
-        if (!this.dateFormat || this.dateFormat.trim() === '') {
-            this.dateFormatError = null;
+    validateDateFormat(fieldKey) {
+        const dateFormat = this.fieldDateFormats[fieldKey];
+        if (!dateFormat || dateFormat.trim() === '') {
+            this.fieldDateFormatErrors = {
+                ...this.fieldDateFormatErrors,
+                [fieldKey]: null
+            };
             return;
         }
 
         try {
             const sampleDate = new Date(2024, 0, 15, 14, 30, 0);
-            format(sampleDate, this.dateFormat);
-            this.dateFormatError = null;
+            format(sampleDate, dateFormat);
+            this.fieldDateFormatErrors = {
+                ...this.fieldDateFormatErrors,
+                [fieldKey]: null
+            };
         } catch (error) {
-            this.dateFormatError = 'Invalid date format';
+            this.fieldDateFormatErrors = {
+                ...this.fieldDateFormatErrors,
+                [fieldKey]: 'Invalid date format'
+            };
         }
     }
 
     @action
-    selectCommonFormat(formatValue) {
-        this.dateFormat = formatValue;
-        this.dateFormatError = null;
-        this.validateDateFormat();
+    selectCommonFormat(fieldKey, formatValue) {
+        this.fieldDateFormats = {
+            ...this.fieldDateFormats,
+            [fieldKey]: formatValue
+        };
+        this.fieldDateFormatErrors = {
+            ...this.fieldDateFormatErrors,
+            [fieldKey]: null
+        };
+        this.validateDateFormat(fieldKey);
     }
 
     // Helper to check if both pickup fields are empty
@@ -711,11 +756,15 @@ export default class ModalsOrderBulkImportComponent extends Component {
         try {
             const sessionId = this.importSession.id;
 
-            // Prepare data for execution including date format if needed
+            // Prepare data for execution including field-specific date formats
             const requestData = {};
-            if (this.isScheduledAtMapped && this.dateFormat) {
-                requestData.date_format = this.dateFormat;
-            }
+            
+            // Add field-specific date formats for mapped date fields
+            this.dateFields.forEach(dateField => {
+                if (this.isDateFieldMapped(dateField.key) && this.fieldDateFormats[dateField.key]) {
+                    requestData[`${dateField.key}_format`] = this.fieldDateFormats[dateField.key];
+                }
+            });
 
             // Call execute endpoint
             const response = yield this.fetch.post(`orders/import-sessions/${sessionId}/execute`, requestData);
